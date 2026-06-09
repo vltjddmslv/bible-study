@@ -63,6 +63,13 @@ export default function RevelationMemorizer() {
   const [practiceUserInput, setPracticeUserInput] = useState<string>("");
   const [showPracticeAnswer, setShowPracticeAnswer] = useState<boolean>(false);
 
+  // --- Cloud Sync States ---
+  const [syncBucketId, setSyncBucketId] = useState<string>("");
+  const [syncEmail, setSyncEmail] = useState<string>("");
+  const [syncRequested, setSyncRequested] = useState<boolean>(false);
+  const [syncLoading, setSyncLoading] = useState<boolean>(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string>("");
+
   // --- TTS State ---
   const [isPlayingTTS, setIsPlayingTTS] = useState<boolean>(false);
   const [ttsSpeed, setTtsSpeed] = useState<number>(1.0);
@@ -78,11 +85,19 @@ export default function RevelationMemorizer() {
     const savedHistory = localStorage.getItem("rev_history");
     const savedTheme = localStorage.getItem("rev_theme");
     const savedCompletedDays = localStorage.getItem("rev_completed_days");
+    const savedSyncBucketId = localStorage.getItem("rev_sync_bucket_id");
+    const savedSyncEmail = localStorage.getItem("rev_sync_email");
+    const savedSyncRequested = localStorage.getItem("rev_sync_requested");
+    const savedLastSyncTime = localStorage.getItem("rev_last_sync_time");
 
     if (savedProgress) setProgress(JSON.parse(savedProgress));
     if (savedNotes) setNotes(JSON.parse(savedNotes));
     if (savedHistory) setStudyHistory(JSON.parse(savedHistory));
     if (savedCompletedDays) setCompletedDays(JSON.parse(savedCompletedDays));
+    if (savedSyncBucketId) setSyncBucketId(savedSyncBucketId);
+    if (savedSyncEmail) setSyncEmail(savedSyncEmail);
+    if (savedSyncRequested) setSyncRequested(savedSyncRequested === "true");
+    if (savedLastSyncTime) setLastSyncTime(savedLastSyncTime);
     if (savedTheme) {
       setDarkMode(savedTheme === "dark");
     } else {
@@ -460,7 +475,7 @@ export default function RevelationMemorizer() {
     setActiveChapterTest(null);
   };
 
-  // --- Backup & Restore Handlers ---
+  // --- Backup & Restore Handlers (Manual File-based) ---
   const handleBackupData = () => {
     const backupObj = {
       progress,
@@ -487,23 +502,200 @@ export default function RevelationMemorizer() {
     fileReader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target?.result as string);
-        if (parsed.progress) setProgress(parsed.progress);
-        if (parsed.notes) setNotes(parsed.notes);
-        if (parsed.studyHistory) setStudyHistory(parsed.studyHistory);
-        if (parsed.completedDays) setCompletedDays(parsed.completedDays);
-        
-        localStorage.setItem("rev_progress", JSON.stringify(parsed.progress || {}));
-        localStorage.setItem("rev_notes", JSON.stringify(parsed.notes || {}));
-        localStorage.setItem("rev_history", JSON.stringify(parsed.studyHistory || []));
-        localStorage.setItem("rev_completed_days", JSON.stringify(parsed.completedDays || {}));
-        
-        alert("🎉 학습 데이터 복원이 완료되었습니다!");
-        window.location.reload();
+        performMerge(parsed);
+        alert("🎉 백업 파일 데이터가 정상적으로 병합 및 복원되었습니다!");
       } catch (err) {
         alert("❌ 올바르지 않은 백업 파일 형식이거나 파일 읽기에 실패했습니다.");
       }
     };
     fileReader.readAsText(file);
+  };
+
+  // --- Cloud Sync Handlers (PC ↔ Mobile Sync via kvdb.io) ---
+  const handleRegisterSyncBucket = async () => {
+    if (!syncEmail.trim() || !syncEmail.includes("@")) {
+      alert("올바른 이메일 주소를 입력해주세요.");
+      return;
+    }
+    setSyncLoading(true);
+    try {
+      const response = await fetch("https://kvdb.io", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: `email=${encodeURIComponent(syncEmail.trim())}`
+      });
+      if (!response.ok) {
+        throw new Error("코드 발급 요청 실패");
+      }
+      const newBucketId = await response.text();
+      setSyncBucketId(newBucketId);
+      setSyncRequested(true);
+      localStorage.setItem("rev_sync_bucket_id", newBucketId);
+      localStorage.setItem("rev_sync_email", syncEmail);
+      localStorage.setItem("rev_sync_requested", "true");
+      alert(`🎉 동기화 코드가 임시 발급되었습니다: ${newBucketId}\n\n입력하신 이메일(${syncEmail})로 인증 링크가 발송되었습니다. 메일함에서 'Verify Email' 링크를 클릭한 후 아래 '동기화 데이터 업로드' 버튼을 클릭해주세요!`);
+    } catch (e) {
+      alert("❌ 동기화 서버 통신에 실패했습니다. 나중에 다시 시도해 주세요.");
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
+  const handleLinkExistingCode = () => {
+    if (!syncBucketId.trim()) {
+      alert("동기화 코드를 입력해주세요.");
+      return;
+    }
+    const cleanCode = syncBucketId.trim();
+    setSyncBucketId(cleanCode);
+    localStorage.setItem("rev_sync_bucket_id", cleanCode);
+    alert(`동기화 코드가 등록되었습니다. 이제 이 코드를 통해 데이터를 업로드하거나 다운로드(병합)할 수 있습니다.`);
+  };
+
+  const handleDisconnectSync = () => {
+    if (confirm("동기화 연결을 해제하시겠습니까? 로컬의 공부 기록은 보존됩니다.")) {
+      setSyncBucketId("");
+      setSyncEmail("");
+      setSyncRequested(false);
+      setLastSyncTime("");
+      localStorage.removeItem("rev_sync_bucket_id");
+      localStorage.removeItem("rev_sync_email");
+      localStorage.removeItem("rev_sync_requested");
+      localStorage.removeItem("rev_last_sync_time");
+      alert("동기화 연결이 해제되었습니다.");
+    }
+  };
+
+  const handleUploadToCloud = async () => {
+    if (!syncBucketId) return;
+    setSyncLoading(true);
+    
+    const backupObj = {
+      progress,
+      notes,
+      studyHistory,
+      completedDays,
+      backupDate: new Date().toISOString()
+    };
+
+    try {
+      const response = await fetch(`https://kvdb.io/${syncBucketId}/rev_study_data`, {
+        method: "POST",
+        body: JSON.stringify(backupObj)
+      });
+      if (response.status === 403 || response.status === 401) {
+        alert("❌ 아직 이메일 인증이 완료되지 않았습니다.\n이메일함에 수신된 kvdb.io 인증 메일의 'Verify Email' 링크를 누른 다음 다시 시도해주세요.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error("업로드 실패");
+      }
+      
+      const nowStr = new Date().toLocaleString();
+      setLastSyncTime(nowStr);
+      localStorage.setItem("rev_last_sync_time", nowStr);
+      alert("📤 현재 기기의 암송 기록이 클라우드에 백업(업로드) 완료되었습니다!");
+    } catch (e) {
+      alert("❌ 백업 업로드에 실패했습니다. 이메일 인증 여부 또는 네트워크를 확인해주세요.");
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
+  const handleDownloadAndMerge = async () => {
+    if (!syncBucketId) return;
+    setSyncLoading(true);
+
+    try {
+      const response = await fetch(`https://kvdb.io/${syncBucketId}/rev_study_data`);
+      if (response.status === 404) {
+        alert("❌ 클라우드에 백업된 데이터가 없습니다. 다른 기기(PC 등)에서 먼저 '데이터 업로드'를 완료해주세요.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error("다운로드 실패");
+      }
+
+      const cloudData = await response.json();
+      performMerge(cloudData);
+      
+      const nowStr = new Date().toLocaleString();
+      setLastSyncTime(nowStr);
+      localStorage.setItem("rev_last_sync_time", nowStr);
+      alert("📥 클라우드 백업 데이터를 다운로드하여 현재 기기 데이터와 누적 병합을 완료했습니다!");
+      window.location.reload();
+    } catch (e) {
+      alert("❌ 동기화 데이터 다운로드에 실패했습니다. 동기화 코드가 올바른지 확인해주세요.");
+    } finally {
+      setSyncLoading(false);
+    }
+  };
+
+  // --- Smart State Merger Helper ---
+  const performMerge = (cloudData: any) => {
+    // 1. Merge Progress (Take advanced status: learned > reviewing > unlearned)
+    const mergedProgress = { ...progress };
+    if (cloudData.progress) {
+      Object.keys(cloudData.progress).forEach((key) => {
+        const localStatus = progress[key] || "unlearned";
+        const cloudStatus = cloudData.progress[key] as ProgressStatus;
+        if (cloudStatus === "learned") {
+          mergedProgress[key] = "learned";
+        } else if (cloudStatus === "reviewing" && localStatus !== "learned") {
+          mergedProgress[key] = "reviewing";
+        }
+      });
+    }
+
+    // 2. Merge Completed Days (Union of completed days)
+    const mergedCompleted = { ...completedDays };
+    if (cloudData.completedDays) {
+      Object.keys(cloudData.completedDays).forEach((dayStr) => {
+        const day = parseInt(dayStr);
+        if (cloudData.completedDays[day]) {
+          mergedCompleted[day] = true;
+        }
+      });
+    }
+
+    // 3. Merge Notes (Keep longer note)
+    const mergedNotes = { ...notes };
+    if (cloudData.notes) {
+      Object.keys(cloudData.notes).forEach((key) => {
+        const localNote = notes[key] || "";
+        const cloudNote = cloudData.notes[key] || "";
+        if (cloudNote.length > localNote.length) {
+          mergedNotes[key] = cloudNote;
+        }
+      });
+    }
+
+    // 4. Merge Study History (Union of histories by date, keeping highest count)
+    let mergedHistory = [...studyHistory];
+    if (cloudData.studyHistory) {
+      cloudData.studyHistory.forEach((cloudRec: StudyRecord) => {
+        const localIdx = mergedHistory.findIndex(h => h.date === cloudRec.date);
+        if (localIdx >= 0) {
+          mergedHistory[localIdx].count = Math.max(mergedHistory[localIdx].count, cloudRec.count);
+        } else {
+          mergedHistory.push(cloudRec);
+        }
+      });
+    }
+
+    // Apply states
+    setProgress(mergedProgress);
+    setCompletedDays(mergedCompleted);
+    setNotes(mergedNotes);
+    setStudyHistory(mergedHistory);
+
+    // Save to localStorage
+    localStorage.setItem("rev_progress", JSON.stringify(mergedProgress));
+    localStorage.setItem("rev_completed_days", JSON.stringify(mergedCompleted));
+    localStorage.setItem("rev_notes", JSON.stringify(mergedNotes));
+    localStorage.setItem("rev_history", JSON.stringify(mergedHistory));
   };
 
   return (
@@ -757,37 +949,151 @@ export default function RevelationMemorizer() {
                 </div>
               </div>
 
-              {/* Backup & Restore Section */}
-              <div className={`p-6 rounded-3xl border lg:col-span-3 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-                <h3 className="text-base font-bold mb-2">💾 학습 데이터 누적 보관 및 백업/복원</h3>
-                <p className="text-xs text-zinc-400 mb-4">
-                  지금까지 공부하고 통과한 모든 진척도와 개인 메모는 **누적되어 브라우저에 안전하게 자동 저장**됩니다. 기기를 변경하거나 기록을 백업해두고 싶을 때 아래의 백업/복원 도구를 이용해 파일로 다운로드하고 언제든지 복원할 수 있습니다.
-                </p>
+              {/* Advanced Study Storage: Sync & Backup Panel */}
+              <div className={`p-6 rounded-3xl border lg:col-span-3 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"} grid grid-cols-1 md:grid-cols-2 gap-8`}>
                 
-                <div className="flex flex-wrap gap-4 items-center">
-                  <button
-                    onClick={handleBackupData}
-                    className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all"
-                  >
-                    📥 내 암송 데이터 백업 다운로드 (.json)
-                  </button>
+                {/* Left side: Cloud Synchronization (PC <-> Mobile) */}
+                <div className="space-y-4">
+                  <h3 className="text-base font-bold text-emerald-400 flex items-center gap-2">
+                    🔄 기기간 클라우드 동기화 (PC ↔ 모바일)
+                  </h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    컴퓨터와 스마트폰 간에 암송 진도를 실시간으로 동기화합니다. 무료 클라우드 저장소(kvdb.io) 연동을 통해 로그인 가입 없이 **이메일 인증 1회**만으로 개별 동기화 코드가 활성화됩니다.
+                  </p>
+
+                  {!syncBucketId ? (
+                    // Setup Sync Code
+                    <div className="space-y-4 pt-2">
+                      <div className="space-y-1">
+                        <label className="block text-[11px] text-zinc-400">1. 새 동기화 코드 신청 (이메일 주소 입력)</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="email"
+                            placeholder="your-email@example.com"
+                            value={syncEmail}
+                            onChange={(e) => setSyncEmail(e.target.value)}
+                            disabled={syncLoading}
+                            className={`flex-1 px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-50 border-slate-200 text-slate-800"}`}
+                          />
+                          <button
+                            onClick={handleRegisterSyncBucket}
+                            disabled={syncLoading}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold rounded-xl whitespace-nowrap transition-colors"
+                          >
+                            {syncLoading ? "신청 중..." : "코드 발급 신청"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1 pt-1">
+                        <label className="block text-[11px] text-zinc-400">또는 2. 기존 발급받은 코드 입력 (모바일 기기 등록 시)</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            placeholder="발급받은 동기화 코드를 붙여넣으세요"
+                            value={syncBucketId}
+                            onChange={(e) => setSyncBucketId(e.target.value)}
+                            className={`flex-1 px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-50 border-slate-200 text-slate-800"}`}
+                          />
+                          <button
+                            onClick={handleLinkExistingCode}
+                            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-bold rounded-xl whitespace-nowrap transition-colors"
+                          >
+                            코드 연동 등록
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    // Linked Sync Actions
+                    <div className="space-y-3 pt-2">
+                      <div className="p-3.5 rounded-2xl bg-zinc-850/80 border border-zinc-800 text-xs space-y-1.5">
+                        <div className="flex justify-between">
+                          <span className="text-zinc-400">내 고유 동기화 코드:</span>
+                          <span className="font-mono font-bold text-amber-400 select-all">{syncBucketId}</span>
+                        </div>
+                        {syncEmail && (
+                          <div className="flex justify-between">
+                            <span className="text-zinc-400">연동된 이메일:</span>
+                            <span className="text-zinc-200 font-semibold">{syncEmail}</span>
+                          </div>
+                        )}
+                        {lastSyncTime && (
+                          <div className="flex justify-between text-[11px]">
+                            <span className="text-zinc-400">최근 동기화 일시:</span>
+                            <span className="text-zinc-300 font-medium">{lastSyncTime}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {syncRequested && (
+                        <p className="text-[10px] text-rose-400/90 leading-relaxed font-semibold">
+                          ⚠️ 최초 업로드 시 이메일함에 수신된 &apos;Verify Email&apos; 인증 단추를 클릭해 주셔야 업로드가 활성화됩니다.
+                        </p>
+                      )}
+
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        <button
+                          onClick={handleUploadToCloud}
+                          disabled={syncLoading}
+                          className="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap"
+                        >
+                          📤 현재 기록 클라우드 업로드
+                        </button>
+                        <button
+                          onClick={handleDownloadAndMerge}
+                          disabled={syncLoading}
+                          className="flex-1 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap"
+                        >
+                          📥 클라우드 기록 내려받아 병합
+                        </button>
+                        <button
+                          onClick={handleDisconnectSync}
+                          className="px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-400 text-xs font-bold rounded-xl transition-colors"
+                          title="동기화 연결 해제"
+                        >
+                          연결 끊기
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right side: File Backup & Restore */}
+                <div className="space-y-4 border-t md:border-t-0 md:border-l border-zinc-800/80 pt-6 md:pt-0 md:pl-8">
+                  <h3 className="text-base font-bold text-zinc-300 flex items-center gap-2">
+                    💾 수동 파일 백업 및 불러오기
+                  </h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    클라우드 서버 연동 없이 암송 기록 데이터를 즉시 내보내거나 가져옵니다. 다른 기기로 데이터를 이동할 때 안전하게 백업용 파일로 저장해 둘 수 있습니다.
+                  </p>
                   
-                  <div className="relative">
-                    <input
-                      type="file"
-                      accept=".json"
-                      onChange={handleRestoreData}
-                      id="restore-file-input"
-                      className="hidden"
-                    />
-                    <label
-                      htmlFor="restore-file-input"
-                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer"
+                  <div className="space-y-3 pt-2">
+                    <button
+                      onClick={handleBackupData}
+                      className="w-full px-4 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors"
                     >
-                      📤 백업 파일에서 불러오기/복원
-                    </label>
+                      📥 내 암송 데이터 백업 다운로드 (.json)
+                    </button>
+                    
+                    <div className="relative">
+                      <input
+                        type="file"
+                        accept=".json"
+                        onChange={handleRestoreData}
+                        id="restore-file-input"
+                        className="hidden"
+                      />
+                      <label
+                        htmlFor="restore-file-input"
+                        className="w-full px-4 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer text-center"
+                      >
+                        📤 백업 파일 복원 및 누적 병합
+                      </label>
+                    </div>
                   </div>
                 </div>
+
               </div>
 
             </div>
@@ -1143,7 +1449,7 @@ export default function RevelationMemorizer() {
                     className={`flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold shadow-md transition-all ${
                       activeTestFeedback?.isComplete
                         ? "bg-emerald-600 hover:bg-emerald-500 text-white"
-                        : "bg-zinc-900 text-zinc-600 cursor-not-allowed border border-zinc-800"
+                        : "bg-zinc-900 text-zinc-650 cursor-not-allowed border border-zinc-800"
                     }`}
                   >
                     {activeTestVerseIdx === activeDayVerses.length - 1 ? "종료 및 도장 받기 🏆" : "다음 문제로"}
@@ -1362,7 +1668,7 @@ export default function RevelationMemorizer() {
 
         {/* --- TAB 3: BIBLE READER (성경 학습 1~22장) --- */}
         {activeTab === "read" && activeChapterTest === null && (
-          <div className="max-w-4xl mx-auto space-y-6">
+          <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
             
             {/* Audio controllers toolbar */}
             <div className={`p-4 rounded-2xl border flex flex-wrap items-center justify-between gap-4 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
