@@ -41,6 +41,13 @@ export default function RevelationMemorizer() {
   const [activeTestVerseIdx, setActiveTestVerseIdx] = useState<number>(0);
   const [revealStudyText, setRevealStudyText] = useState<boolean[]>([true, true, true, true, true]);
 
+  // --- Chapter Test States ---
+  const [activeChapterTest, setActiveChapterTest] = useState<number | null>(null);
+  const [chapterTestAnswers, setChapterTestAnswers] = useState<string[]>([]);
+  const [activeChapterTestIdx, setActiveChapterTestIdx] = useState<number>(0);
+  const [chapterTestMode, setChapterTestMode] = useState<"initial" | "full">("initial");
+  const [showChapterTestAnswer, setShowChapterTestAnswer] = useState<boolean>(false);
+
   // --- Practice Tab States (Self Learning) ---
   const [practiceSubTab, setPracticeSubTab] = useState<"card" | "blank" | "typing">("card");
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState<number>(0);
@@ -203,7 +210,6 @@ export default function RevelationMemorizer() {
       if (onEndCallback) {
         onEndCallback();
       } else if (autoPlayTts && activeTab === "read") {
-        // Auto-play next logic in normal reading tab
         const currentIdx = filteredVerses.findIndex(v => `${v.chapter}:${v.verse}` === verseKey);
         if (currentIdx >= 0 && currentIdx < filteredVerses.length - 1) {
           const next = filteredVerses[currentIdx + 1];
@@ -282,11 +288,28 @@ export default function RevelationMemorizer() {
     });
   }, [currentPracticeVerse, blankDifficulty]);
 
-  // Typing validator helper
+  // --- Regex-based Verse Marker Stripper & Typing Validator ---
   const getTypingFeedback = (input: string, originalText: string, mode: "initial" | "full") => {
     const target = mode === "initial" ? getInitials(originalText) : originalText;
-    const normalizedInput = input.trim().replace(/\s+/g, " ");
-    const normalizedTarget = target.trim().replace(/\s+/g, " ");
+    
+    // Strips prefixes like "1.", "1절", "1:1", "[1:1]", ":1" from start of the typed string
+    const cleanVerseMarker = (str: string): string => {
+      return str
+        .replace(/^\s*\[?\d+장\s*\d+절\]?\s*/, "") // matches "[1장 1절]" at start
+        .replace(/^\s*\[?\d+[:.]\d+\]?\s*/, "")    // matches "[1:1]" or "1:1" at start
+        .replace(/^\s*[:.]\d+\s*/, "")              // matches ":1" at start
+        .replace(/^\s*\d+절\s*/, "")                // matches "1절" at start
+        .replace(/^\s*\d+\.\s*/, "")                // matches "1." at start
+        .replace(/^\s*\d+\s+/, "")                 // matches "1 " at start
+        .trim();
+    };
+
+    const cleanedInput = cleanVerseMarker(input);
+    const cleanedTarget = cleanVerseMarker(target);
+
+    // Normalize spacing
+    const normalizedInput = cleanedInput.replace(/\s+/g, " ");
+    const normalizedTarget = cleanedTarget.replace(/\s+/g, " ");
 
     if (normalizedInput === "") return null;
 
@@ -402,6 +425,87 @@ export default function RevelationMemorizer() {
     ? getTypingFeedback(dayTestAnswers[activeTestVerseIdx], activeTestVerse.text, dayTestMode)
     : null;
 
+  // --- Chapter Test Handlers ---
+  const activeChapterTestVerses = useMemo(() => {
+    if (activeChapterTest === null) return [];
+    return REVELATION_VERSES.filter((v) => v.chapter === activeChapterTest);
+  }, [activeChapterTest]);
+
+  const handleStartChapterTest = (chapterNum: number) => {
+    setActiveChapterTest(chapterNum);
+    setActiveChapterTestIdx(0);
+    const count = REVELATION_VERSES.filter((v) => v.chapter === chapterNum).length;
+    setChapterTestAnswers(Array(count).fill(""));
+    setChapterTestMode("initial");
+    setShowChapterTestAnswer(false);
+    stopTTS();
+  };
+
+  const activeChapterTestVerse = activeChapterTestVerses[activeChapterTestIdx];
+  const activeChapterTestFeedback = activeChapterTestVerse
+    ? getTypingFeedback(chapterTestAnswers[activeChapterTestIdx], activeChapterTestVerse.text, chapterTestMode)
+    : null;
+
+  const handleCompleteChapterTest = () => {
+    if (activeChapterTest === null) return;
+
+    // Mark all verses of this chapter as learned in master progress
+    const newProgress = { ...progress };
+    activeChapterTestVerses.forEach((v) => {
+      newProgress[`${v.chapter}:${v.verse}`] = "learned";
+    });
+    saveProgress(newProgress);
+
+    alert(`🎉 요한계시록 ${activeChapterTest}장 전체 암송 시험을 합격하셨습니다! ${activeChapterTestVerses.length}개 전 구절이 '암기 완료(🟢)'로 등록되었습니다.`);
+    setActiveChapterTest(null);
+  };
+
+  // --- Backup & Restore Handlers ---
+  const handleBackupData = () => {
+    const backupObj = {
+      progress,
+      notes,
+      studyHistory,
+      completedDays,
+      backupDate: new Date().toISOString()
+    };
+    
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupObj));
+    const downloadAnchor = document.createElement('a');
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `revelation_planner_backup_${new Date().toISOString().split('T')[0]}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
+  const handleRestoreData = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileReader = new FileReader();
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    fileReader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target?.result as string);
+        if (parsed.progress) setProgress(parsed.progress);
+        if (parsed.notes) setNotes(parsed.notes);
+        if (parsed.studyHistory) setStudyHistory(parsed.studyHistory);
+        if (parsed.completedDays) setCompletedDays(parsed.completedDays);
+        
+        localStorage.setItem("rev_progress", JSON.stringify(parsed.progress || {}));
+        localStorage.setItem("rev_notes", JSON.stringify(parsed.notes || {}));
+        localStorage.setItem("rev_history", JSON.stringify(parsed.studyHistory || []));
+        localStorage.setItem("rev_completed_days", JSON.stringify(parsed.completedDays || {}));
+        
+        alert("🎉 학습 데이터 복원이 완료되었습니다!");
+        window.location.reload();
+      } catch (err) {
+        alert("❌ 올바르지 않은 백업 파일 형식이거나 파일 읽기에 실패했습니다.");
+      }
+    };
+    fileReader.readAsText(file);
+  };
+
   return (
     <div className={`min-h-screen transition-colors duration-300 font-sans ${darkMode ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-slate-900"}`}>
       {/* --- HEADER --- */}
@@ -422,26 +526,26 @@ export default function RevelationMemorizer() {
           {/* Navigation Tabs */}
           <nav className="flex bg-zinc-800/50 p-1 rounded-lg border border-zinc-700/50 text-xs sm:text-sm">
             <button
-              onClick={() => { setActiveTab("dashboard"); setActiveDay(null); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "dashboard" && activeDay === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              onClick={() => { setActiveTab("dashboard"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "dashboard" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
             >
               대시보드
             </button>
             <button
-              onClick={() => { setActiveTab("planner"); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "planner" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              onClick={() => { setActiveTab("planner"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "planner" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
             >
               일일 플래너
             </button>
             <button
-              onClick={() => { setActiveTab("read"); setActiveDay(null); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "read" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              onClick={() => { setActiveTab("read"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "read" && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
             >
               성경 학습 (1~22장)
             </button>
             <button
-              onClick={() => { setActiveTab("practice"); setActiveDay(null); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "practice" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              onClick={() => { setActiveTab("practice"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "practice" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
             >
               개별 훈련
             </button>
@@ -451,7 +555,7 @@ export default function RevelationMemorizer() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setDarkMode(!darkMode)}
-              className={`p-2 rounded-lg transition-colors border ${darkMode ? "bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-yellow-400" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"}`}
+              className={`p-2 rounded-lg transition-colors border ${darkMode ? "bg-zinc-800 hover:bg-zinc-750 border-zinc-700 text-yellow-400" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"}`}
               title="테마 변경"
             >
               {darkMode ? (
@@ -467,8 +571,8 @@ export default function RevelationMemorizer() {
       {/* --- MAIN LAYOUT --- */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         
-        {/* --- GLOBAL SEARCH & CHAPTER BAR (Only visible on Read and Practice tabs) --- */}
-        {(activeTab === "read" || activeTab === "practice") && (
+        {/* --- GLOBAL SEARCH & CHAPTER BAR (Only visible on Read and Practice tabs when not in Chapter Test) --- */}
+        {(activeTab === "read" || activeTab === "practice") && activeChapterTest === null && (
           <div className={`p-4 mb-6 rounded-2xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               
@@ -542,7 +646,7 @@ export default function RevelationMemorizer() {
         )}
 
         {/* --- TAB 1: DASHBOARD --- */}
-        {activeTab === "dashboard" && activeDay === null && (
+        {activeTab === "dashboard" && activeDay === null && activeChapterTest === null && (
           <div className="space-y-6 animate-fade-in">
             {/* Quick summary header banner */}
             <div className="p-6 rounded-3xl bg-gradient-to-r from-emerald-800/80 to-teal-700/80 text-white shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
@@ -652,13 +756,47 @@ export default function RevelationMemorizer() {
                   ))}
                 </div>
               </div>
+
+              {/* Backup & Restore Section */}
+              <div className={`p-6 rounded-3xl border lg:col-span-3 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                <h3 className="text-base font-bold mb-2">💾 학습 데이터 누적 보관 및 백업/복원</h3>
+                <p className="text-xs text-zinc-400 mb-4">
+                  지금까지 공부하고 통과한 모든 진척도와 개인 메모는 **누적되어 브라우저에 안전하게 자동 저장**됩니다. 기기를 변경하거나 기록을 백업해두고 싶을 때 아래의 백업/복원 도구를 이용해 파일로 다운로드하고 언제든지 복원할 수 있습니다.
+                </p>
+                
+                <div className="flex flex-wrap gap-4 items-center">
+                  <button
+                    onClick={handleBackupData}
+                    className="px-4 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all"
+                  >
+                    📥 내 암송 데이터 백업 다운로드 (.json)
+                  </button>
+                  
+                  <div className="relative">
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleRestoreData}
+                      id="restore-file-input"
+                      className="hidden"
+                    />
+                    <label
+                      htmlFor="restore-file-input"
+                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      📤 백업 파일에서 불러오기/복원
+                    </label>
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
         )}
 
         {/* --- TAB 2: DAILY PLANNER (하루 5구절 플래너) --- */}
         {activeTab === "planner" && activeDay === null && (
-          <div className="space-y-6">
+          <div className="space-y-6 animate-fade-in">
             <div className="flex justify-between items-center flex-wrap gap-2">
               <div>
                 <h3 className="text-xl font-extrabold">81일 일일 암송 스케줄러</h3>
@@ -782,7 +920,6 @@ export default function RevelationMemorizer() {
                     <span className="text-sm text-zinc-400">📖 오늘의 5구절 본문을 정독하고 음성을 들으며 눈으로 익히세요.</span>
                     <button
                       onClick={() => {
-                        // Toggle showing all texts at once for testing memory
                         const allHidden = revealStudyText.every(x => !x);
                         setRevealStudyText(Array(5).fill(allHidden));
                       }}
@@ -911,7 +1048,7 @@ export default function RevelationMemorizer() {
                   <div className="space-y-4">
                     <textarea
                       autoFocus
-                      placeholder={dayTestMode === "initial" ? "초성을 보며 초성대로 혹은 한글로 타이핑해보세요..." : "성경 구절 전체를 정확히 입력해보세요..."}
+                      placeholder={dayTestMode === "initial" ? "초성을 보며 초성대로 혹은 한글로 타이핑해보세요... (앞부분의 '1절', '1.' 등은 제외하고 치셔도 됩니다)" : "성경 구절 전체를 정확히 입력해보세요..."}
                       value={dayTestAnswers[activeTestVerseIdx]}
                       onChange={(e) => {
                         const updated = [...dayTestAnswers];
@@ -948,7 +1085,7 @@ export default function RevelationMemorizer() {
                         )}
                       </div>
                       <div className="text-zinc-500">
-                        글자 수: {dayTestAnswers[activeTestVerseIdx].length} / {dayTestMode === "initial" ? getInitials(activeTestVerse.text).length : activeTestVerse.text.length}
+                        허용된 입력 형식: 본문만 입력하거나, 앞에 `1.`, `1절`, `1:1`, `:1`을 함께 쳐도 모두 정답 처리됩니다.
                       </div>
                     </div>
                   </div>
@@ -957,7 +1094,6 @@ export default function RevelationMemorizer() {
                   <div className="mt-4 pt-4 border-t border-zinc-800/40 flex justify-between gap-3">
                     <button
                       onClick={() => {
-                        // Play audio as a hint
                         playTTS(activeTestVerse.text, `${activeTestVerse.chapter}:${activeTestVerse.verse}`);
                       }}
                       className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-xs text-zinc-400"
@@ -996,7 +1132,6 @@ export default function RevelationMemorizer() {
                     disabled={!activeTestFeedback?.isComplete}
                     onClick={() => {
                       if (activeTestVerseIdx === activeDayVerses.length - 1) {
-                        // Finished all 5 questions!
                         handleCompleteDay(activeDay);
                         setDayStudyStep("complete");
                         stopTTS();
@@ -1053,8 +1188,180 @@ export default function RevelationMemorizer() {
           </div>
         )}
 
+        {/* --- DEDICATED CHAPTER-BY-CHAPTER TEST WORKSPACE --- */}
+        {activeTab === "read" && activeChapterTest !== null && activeChapterTestVerse && (
+          <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+              <button
+                onClick={() => { setActiveChapterTest(null); stopTTS(); }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-xs font-bold text-zinc-400 hover:text-zinc-200 transition-colors border border-zinc-800"
+              >
+                ⬅️ 성경 학습으로 돌아가기
+              </button>
+              <h3 className="text-lg font-black text-amber-500">
+                요한계시록 {activeChapterTest}장 전체 시험 (총 {activeChapterTestVerses.length}구절)
+              </h3>
+            </div>
+
+            <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+              <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-800/85">
+                <span className="text-sm font-bold text-zinc-400">
+                  구절 시험 {activeChapterTestIdx + 1} / {activeChapterTestVerses.length}
+                </span>
+                
+                {/* Mode toggle */}
+                <div className="flex bg-zinc-800 p-0.5 rounded-lg border border-zinc-700 text-xs">
+                  <button
+                    onClick={() => { setChapterTestMode("initial"); }}
+                    className={`px-3 py-1 rounded-md font-medium transition-all ${chapterTestMode === "initial" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+                  >
+                    초성 매칭
+                  </button>
+                  <button
+                    onClick={() => { setChapterTestMode("full"); }}
+                    className={`px-3 py-1 rounded-md font-medium transition-all ${chapterTestMode === "full" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+                  >
+                    전체 입력
+                  </button>
+                </div>
+              </div>
+
+              <div className="text-center mb-6">
+                <h3 className="text-2xl font-black text-amber-400">
+                  계시록 {activeChapterTestVerse.chapter}장 {activeChapterTestVerse.verse}절
+                </h3>
+              </div>
+
+              {/* Consonant Hint */}
+              {chapterTestMode === "initial" && (
+                <div className="mb-4 p-3.5 rounded-xl bg-zinc-850/60 border border-zinc-800/80 text-center">
+                  <span className="text-[10px] text-zinc-500 block mb-0.5">초성 힌트</span>
+                  <p className="text-base font-bold tracking-widest text-emerald-300 leading-relaxed break-all">
+                    {getInitials(activeChapterTestVerse.text)}
+                  </p>
+                </div>
+              )}
+
+              {/* Input Area */}
+              <div className="space-y-4">
+                <textarea
+                  autoFocus
+                  placeholder={chapterTestMode === "initial" ? "초성을 보며 초성 혹은 한글로 입력해보세요..." : "구절 텍스트 전체를 타이핑해보세요..."}
+                  value={chapterTestAnswers[activeChapterTestIdx] || ""}
+                  onChange={(e) => {
+                    const updated = [...chapterTestAnswers];
+                    updated[activeChapterTestIdx] = e.target.value;
+                    setChapterTestAnswers(updated);
+                  }}
+                  className={`w-full p-4 text-base rounded-2xl border outline-none min-h-[110px] transition-all duration-350 ${
+                    (chapterTestAnswers[activeChapterTestIdx] || "") === ""
+                      ? darkMode
+                        ? "bg-zinc-800 border-zinc-700"
+                        : "bg-slate-50 border-slate-200"
+                      : activeChapterTestFeedback?.isMatch
+                      ? activeChapterTestFeedback?.isComplete
+                        ? "bg-emerald-950/20 border-emerald-500 text-emerald-300"
+                        : "bg-zinc-800 border-emerald-600 text-zinc-200"
+                      : "bg-rose-950/20 border-rose-600 text-rose-300"
+                  }`}
+                />
+
+                <div className="flex justify-between items-center text-xs">
+                  <div>
+                    {(chapterTestAnswers[activeChapterTestIdx] || "") !== "" && (
+                      <span className="font-bold">
+                        {activeChapterTestFeedback?.isMatch ? (
+                          activeChapterTestFeedback?.isComplete ? (
+                            <span className="text-emerald-400">🎉 일치합니다! 다음 구절로 가세요.</span>
+                          ) : (
+                            <span className="text-emerald-400">✅ 맞게 쓰고 계십니다...</span>
+                          )
+                        ) : (
+                          <span className="text-rose-500">❌ 오타가 있습니다.</span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-zinc-500">
+                    앞부분에 장/절 번호(예: `1.`, `1절`, `1:1`, `:1`)를 적거나 본문만 적어도 모두 통과됩니다.
+                  </div>
+                </div>
+              </div>
+
+              {/* Hints */}
+              <div className="mt-4 pt-4 border-t border-zinc-800/40 flex justify-between gap-3">
+                <button
+                  onClick={() => playTTS(activeChapterTestVerse.text, `${activeChapterTestVerse.chapter}:${activeChapterTestVerse.verse}`)}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 text-xs text-zinc-400"
+                >
+                  🔊 음성 힌트 듣기
+                </button>
+                <button
+                  onClick={() => {
+                    const updated = [...chapterTestAnswers];
+                    updated[activeChapterTestIdx] = chapterTestMode === "initial" ? getInitials(activeChapterTestVerse.text) : activeChapterTestVerse.text;
+                    setChapterTestAnswers(updated);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-zinc-800 text-xs text-zinc-400"
+                >
+                  👁️ 정답 채우기
+                </button>
+              </div>
+
+            </div>
+
+            {/* Test Navigation */}
+            <div className="flex justify-between gap-4">
+              <button
+                disabled={activeChapterTestIdx === 0}
+                onClick={() => {
+                  setActiveChapterTestIdx((prev) => prev - 1);
+                  stopTTS();
+                }}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-xs font-bold text-zinc-400 disabled:opacity-40"
+              >
+                이전 구절
+              </button>
+
+              <button
+                disabled={!activeChapterTestFeedback?.isComplete}
+                onClick={() => {
+                  if (activeChapterTestIdx === activeChapterTestVerses.length - 1) {
+                    handleCompleteChapterTest();
+                  } else {
+                    setActiveChapterTestIdx((prev) => prev + 1);
+                    stopTTS();
+                  }
+                }}
+                className={`flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold shadow-md transition-all ${
+                  activeChapterTestFeedback?.isComplete
+                    ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                    : "bg-zinc-900 text-zinc-650 cursor-not-allowed border border-zinc-800"
+                }`}
+              >
+                {activeChapterTestIdx === activeChapterTestVerses.length - 1 ? "채점 완료 및 시험 통과 🏆" : "다음 구절 시험"}
+              </button>
+            </div>
+
+            {/* Answer peek panel */}
+            <div className="text-center">
+              <button
+                onClick={() => setShowChapterTestAnswer(!showChapterTestAnswer)}
+                className="text-xs text-zinc-400 hover:text-zinc-200 underline"
+              >
+                {showChapterTestAnswer ? "힌트 본문 숨기기" : "힌트 본문 보기"}
+              </button>
+              {showChapterTestAnswer && (
+                <div className="mt-4 p-4 rounded-xl border border-dashed border-zinc-800 text-left bg-zinc-900/50">
+                  <p className="text-sm font-semibold">{activeChapterTestVerse.text}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* --- TAB 3: BIBLE READER (성경 학습 1~22장) --- */}
-        {activeTab === "read" && (
+        {activeTab === "read" && activeChapterTest === null && (
           <div className="max-w-4xl mx-auto space-y-6">
             
             {/* Audio controllers toolbar */}
@@ -1119,7 +1426,22 @@ export default function RevelationMemorizer() {
                     {selectedChapter === 0 ? "요한계시록 전체 구절" : `요한계시록 ${selectedChapter}장`}
                   </h2>
                   <p className="text-xs text-zinc-400 mt-2">왼쪽 번호 및 기호(🟢🟡🔴)를 눌러서 개별 구절 상태를 변경하거나 스피커를 눌러 구절을 낭독시킬 수 있습니다.</p>
+                  
+                  {selectedChapter !== 0 && (
+                    <div className="mt-4">
+                      <button
+                        onClick={() => handleStartChapterTest(selectedChapter)}
+                        className="px-5 py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 text-white rounded-2xl text-xs font-black hover:scale-105 transition-all shadow-md flex items-center gap-1.5 mx-auto"
+                      >
+                        ✏️ {selectedChapter}장 전체 시험보기 (총 {REVELATION_VERSES.filter(v => v.chapter === selectedChapter).length}구절)
+                      </button>
+                    </div>
+                  )}
                 </div>
+
+                {filteredVerses.length === 0 && (
+                  <div className="text-center py-10 text-zinc-500">조건과 일치하는 구절이 없습니다.</div>
+                )}
 
                 <div className="space-y-6">
                   {filteredVerses.map((v) => {
@@ -1191,7 +1513,7 @@ export default function RevelationMemorizer() {
 
         {/* --- TAB 4: PRACTICE (개별 훈련소) --- */}
         {activeTab === "practice" && currentPracticeVerse && (
-          <div className="max-w-2xl mx-auto space-y-6">
+          <div className="max-w-2xl mx-auto space-y-6 animate-fade-in">
             
             {/* Sub-tab selection */}
             <div className="grid grid-cols-3 bg-zinc-900 p-1 rounded-2xl border border-zinc-800 text-sm font-semibold">
@@ -1401,7 +1723,7 @@ export default function RevelationMemorizer() {
                       )}
                     </div>
                     <div className="text-zinc-500">
-                      글자 수: {practiceUserInput.length} / {typingMode === "initial" ? getInitials(currentPracticeVerse.text).length : currentPracticeVerse.text.length}
+                      앞부분에 `1.`, `1절`, `1:1`, `:1`을 쓰거나 생략해도 채점 시 정상 통과됩니다.
                     </div>
                   </div>
                 </div>
@@ -1443,7 +1765,6 @@ export default function RevelationMemorizer() {
               <button
                 disabled={currentPracticeIndex === filteredVerses.length - 1}
                 onClick={() => {
-                  // If they finished correctly in typing practice, automatically mark as learned
                   const feed = getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode);
                   if (practiceSubTab === "typing" && feed?.isComplete) {
                     handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "learned");
