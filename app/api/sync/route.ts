@@ -16,7 +16,7 @@ export async function GET(request: Request) {
     }
 
     const cleanUsername = username.trim().toLowerCase();
-    const db = readDb();
+    const db = await readDb();
     const user = db.users[cleanUsername];
 
     if (!user || user.token !== token) {
@@ -56,7 +56,7 @@ export async function POST(request: Request) {
     }
 
     const cleanUsername = username.trim().toLowerCase();
-    const db = readDb();
+    const db = await readDb();
     const user = db.users[cleanUsername];
 
     if (!user || user.token !== token) {
@@ -124,7 +124,7 @@ export async function POST(request: Request) {
     user.studyHistory = mergedHistory;
     user.updatedAt = new Date().toISOString();
 
-    writeDb(db);
+    await writeDb(db);
 
     return NextResponse.json({
       success: true,

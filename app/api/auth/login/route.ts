@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     }
 
     const cleanUsername = username.trim().toLowerCase();
-    const db = readDb();
+    const db = await readDb();
     const user = db.users[cleanUsername];
 
     if (!user) {
@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     user.token = token;
     user.updatedAt = new Date().toISOString();
     
-    writeDb(db);
+    await writeDb(db);
 
     return NextResponse.json({
       success: true,

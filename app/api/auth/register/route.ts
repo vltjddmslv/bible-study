@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const db = readDb();
+    const db = await readDb();
 
     if (db.users[cleanUsername]) {
       return NextResponse.json(
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
       updatedAt: new Date().toISOString(),
     };
 
-    writeDb(db);
+    await writeDb(db);
 
     return NextResponse.json({ success: true, message: "회원가입 완료!" });
   } catch (e) {
