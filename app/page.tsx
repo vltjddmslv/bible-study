@@ -63,10 +63,13 @@ export default function RevelationMemorizer() {
   const [practiceUserInput, setPracticeUserInput] = useState<string>("");
   const [showPracticeAnswer, setShowPracticeAnswer] = useState<boolean>(false);
 
-  // --- Cloud Sync States ---
-  const [syncBucketId, setSyncBucketId] = useState<string>("");
-  const [syncEmail, setSyncEmail] = useState<string>("");
-  const [syncRequested, setSyncRequested] = useState<boolean>(false);
+  // --- Login-based Sync States ---
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [loggedInUser, setLoggedInUser] = useState<string>("");
+  const [sessionToken, setSessionToken] = useState<string>("");
+  const [loginId, setLoginId] = useState<string>("");
+  const [loginPw, setLoginPw] = useState<string>("");
+  const [isRegisterMode, setIsRegisterMode] = useState<boolean>(false);
   const [syncLoading, setSyncLoading] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>("");
 
@@ -85,18 +88,19 @@ export default function RevelationMemorizer() {
     const savedHistory = localStorage.getItem("rev_history");
     const savedTheme = localStorage.getItem("rev_theme");
     const savedCompletedDays = localStorage.getItem("rev_completed_days");
-    const savedSyncBucketId = localStorage.getItem("rev_sync_bucket_id");
-    const savedSyncEmail = localStorage.getItem("rev_sync_email");
-    const savedSyncRequested = localStorage.getItem("rev_sync_requested");
+    const savedUser = localStorage.getItem("rev_username");
+    const savedToken = localStorage.getItem("rev_token");
     const savedLastSyncTime = localStorage.getItem("rev_last_sync_time");
 
     if (savedProgress) setProgress(JSON.parse(savedProgress));
     if (savedNotes) setNotes(JSON.parse(savedNotes));
     if (savedHistory) setStudyHistory(JSON.parse(savedHistory));
     if (savedCompletedDays) setCompletedDays(JSON.parse(savedCompletedDays));
-    if (savedSyncBucketId) setSyncBucketId(savedSyncBucketId);
-    if (savedSyncEmail) setSyncEmail(savedSyncEmail);
-    if (savedSyncRequested) setSyncRequested(savedSyncRequested === "true");
+    if (savedUser && savedToken) {
+      setIsLoggedIn(true);
+      setLoggedInUser(savedUser);
+      setSessionToken(savedToken);
+    }
     if (savedLastSyncTime) setLastSyncTime(savedLastSyncTime);
     if (savedTheme) {
       setDarkMode(savedTheme === "dark");
@@ -125,6 +129,38 @@ export default function RevelationMemorizer() {
     }
     localStorage.setItem("rev_theme", darkMode ? "dark" : "light");
   }, [darkMode]);
+
+  // --- Auto-sync Download on login/app mount ---
+  useEffect(() => {
+    if (isLoggedIn && loggedInUser && sessionToken) {
+      const fetchAndMerge = async () => {
+        try {
+          const response = await fetch(`/api/sync?username=${encodeURIComponent(loggedInUser)}&token=${sessionToken}`);
+          if (response.ok) {
+            const cloudData = await response.json();
+            performMerge(cloudData);
+            const nowStr = new Date().toLocaleString();
+            setLastSyncTime(nowStr);
+            localStorage.setItem("rev_last_sync_time", nowStr);
+          }
+        } catch (e) {
+          console.error("Auto sync download failed", e);
+        }
+      };
+      fetchAndMerge();
+    }
+  }, [isLoggedIn, loggedInUser, sessionToken]);
+
+  // --- Auto-sync Upload (Debounced) ---
+  useEffect(() => {
+    if (!isLoggedIn || !loggedInUser || !sessionToken) return;
+
+    const handler = setTimeout(() => {
+      triggerBackgroundUpload(progress, notes, studyHistory, completedDays);
+    }, 1500); // 1.5s debounce
+
+    return () => clearTimeout(handler);
+  }, [progress, notes, studyHistory, completedDays, isLoggedIn, loggedInUser, sessionToken]);
 
   // Helper to save progress
   const saveProgress = (newProgress: VerseProgress) => {
@@ -512,124 +548,163 @@ export default function RevelationMemorizer() {
   };
 
   // --- Cloud Sync Handlers (PC ↔ Mobile Sync via kvdb.io) ---
-  const handleRegisterSyncBucket = async () => {
-    if (!syncEmail.trim() || !syncEmail.includes("@")) {
-      alert("올바른 이메일 주소를 입력해주세요.");
+  // --- Cloud Sync Handlers (PC ↔ Mobile Sync via Login) ---
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginId.trim() || !loginPw.trim()) {
+      alert("아이디와 비밀번호를 모두 입력해주세요.");
       return;
     }
     setSyncLoading(true);
     try {
-      const response = await fetch("https://kvdb.io", {
+      const response = await fetch("/api/auth/register", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: `email=${encodeURIComponent(syncEmail.trim())}`
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginId, password: loginPw })
       });
+      const data = await response.json();
       if (!response.ok) {
-        throw new Error("코드 발급 요청 실패");
+        throw new Error(data.error || "회원가입 실패");
       }
-      const newBucketId = await response.text();
-      setSyncBucketId(newBucketId);
-      setSyncRequested(true);
-      localStorage.setItem("rev_sync_bucket_id", newBucketId);
-      localStorage.setItem("rev_sync_email", syncEmail);
-      localStorage.setItem("rev_sync_requested", "true");
-      alert(`🎉 동기화 코드가 임시 발급되었습니다: ${newBucketId}\n\n입력하신 이메일(${syncEmail})로 인증 링크가 발송되었습니다. 메일함에서 'Verify Email' 링크를 클릭한 후 아래 '동기화 데이터 업로드' 버튼을 클릭해주세요!`);
-    } catch (e) {
-      alert("❌ 동기화 서버 통신에 실패했습니다. 나중에 다시 시도해 주세요.");
+      alert("🎉 회원가입 성공! 로그인해 주세요.");
+      setIsRegisterMode(false);
+      setLoginPw("");
+    } catch (e: any) {
+      alert(`❌ 회원가입 오류: ${e.message}`);
     } finally {
       setSyncLoading(false);
     }
   };
 
-  const handleLinkExistingCode = () => {
-    if (!syncBucketId.trim()) {
-      alert("동기화 코드를 입력해주세요.");
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginId.trim() || !loginPw.trim()) {
+      alert("아이디와 비밀번호를 입력해주세요.");
       return;
     }
-    const cleanCode = syncBucketId.trim();
-    setSyncBucketId(cleanCode);
-    localStorage.setItem("rev_sync_bucket_id", cleanCode);
-    alert(`동기화 코드가 등록되었습니다. 이제 이 코드를 통해 데이터를 업로드하거나 다운로드(병합)할 수 있습니다.`);
+    setSyncLoading(true);
+    try {
+      const response = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginId, password: loginPw })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "로그인 실패");
+      }
+      
+      setIsLoggedIn(true);
+      setLoggedInUser(data.username);
+      setSessionToken(data.token);
+      localStorage.setItem("rev_username", data.username);
+      localStorage.setItem("rev_token", data.token);
+
+      setLoginId("");
+      setLoginPw("");
+
+      alert(`👋 ${data.username}님, 반갑습니다! 로그인 성공 및 클라우드 동기화가 활성화되었습니다.`);
+    } catch (e: any) {
+      alert(`❌ 로그인 오류: ${e.message}`);
+    } finally {
+      setSyncLoading(false);
+    }
   };
 
-  const handleDisconnectSync = () => {
-    if (confirm("동기화 연결을 해제하시겠습니까? 로컬의 공부 기록은 보존됩니다.")) {
-      setSyncBucketId("");
-      setSyncEmail("");
-      setSyncRequested(false);
+  const handleLogout = () => {
+    if (confirm("로그아웃 하시겠습니까? 로컬의 공부 기록은 브라우저에 보존됩니다.")) {
+      setIsLoggedIn(false);
+      setLoggedInUser("");
+      setSessionToken("");
       setLastSyncTime("");
-      localStorage.removeItem("rev_sync_bucket_id");
-      localStorage.removeItem("rev_sync_email");
-      localStorage.removeItem("rev_sync_requested");
+      localStorage.removeItem("rev_username");
+      localStorage.removeItem("rev_token");
       localStorage.removeItem("rev_last_sync_time");
-      alert("동기화 연결이 해제되었습니다.");
+      alert("로그아웃 되었습니다.");
     }
   };
 
   const handleUploadToCloud = async () => {
-    if (!syncBucketId) return;
+    if (!isLoggedIn || !loggedInUser || !sessionToken) return;
     setSyncLoading(true);
-    
-    const backupObj = {
-      progress,
-      notes,
-      studyHistory,
-      completedDays,
-      backupDate: new Date().toISOString()
-    };
-
     try {
-      const response = await fetch(`https://kvdb.io/${syncBucketId}/rev_study_data`, {
+      const response = await fetch("/api/sync", {
         method: "POST",
-        body: JSON.stringify(backupObj)
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: loggedInUser,
+          token: sessionToken,
+          progress,
+          notes,
+          studyHistory,
+          completedDays
+        })
       });
-      if (response.status === 403 || response.status === 401) {
-        alert("❌ 아직 이메일 인증이 완료되지 않았습니다.\n이메일함에 수신된 kvdb.io 인증 메일의 'Verify Email' 링크를 누른 다음 다시 시도해주세요.");
-        return;
-      }
+      const data = await response.json();
       if (!response.ok) {
-        throw new Error("업로드 실패");
+        throw new Error(data.error || "동기화 실패");
       }
-      
       const nowStr = new Date().toLocaleString();
       setLastSyncTime(nowStr);
       localStorage.setItem("rev_last_sync_time", nowStr);
-      alert("📤 현재 기기의 암송 기록이 클라우드에 백업(업로드) 완료되었습니다!");
-    } catch (e) {
-      alert("❌ 백업 업로드에 실패했습니다. 이메일 인증 여부 또는 네트워크를 확인해주세요.");
+      alert("📤 현재 진행상황을 클라우드 서버에 업로드(병합) 완료했습니다!");
+    } catch (e: any) {
+      alert(`❌ 업로드 오류: ${e.message}`);
     } finally {
       setSyncLoading(false);
     }
   };
 
   const handleDownloadAndMerge = async () => {
-    if (!syncBucketId) return;
+    if (!isLoggedIn || !loggedInUser || !sessionToken) return;
     setSyncLoading(true);
-
     try {
-      const response = await fetch(`https://kvdb.io/${syncBucketId}/rev_study_data`);
-      if (response.status === 404) {
-        alert("❌ 클라우드에 백업된 데이터가 없습니다. 다른 기기(PC 등)에서 먼저 '데이터 업로드'를 완료해주세요.");
-        return;
-      }
+      const response = await fetch(`/api/sync?username=${encodeURIComponent(loggedInUser)}&token=${sessionToken}`);
+      const data = await response.json();
       if (!response.ok) {
-        throw new Error("다운로드 실패");
+        throw new Error(data.error || "동기화 실패");
       }
-
-      const cloudData = await response.json();
-      performMerge(cloudData);
       
+      performMerge(data);
       const nowStr = new Date().toLocaleString();
       setLastSyncTime(nowStr);
       localStorage.setItem("rev_last_sync_time", nowStr);
-      alert("📥 클라우드 백업 데이터를 다운로드하여 현재 기기 데이터와 누적 병합을 완료했습니다!");
-      window.location.reload();
-    } catch (e) {
-      alert("❌ 동기화 데이터 다운로드에 실패했습니다. 동기화 코드가 올바른지 확인해주세요.");
+      alert("📥 클라우드 서버의 학습 기록을 가져와 병합 완료했습니다!");
+    } catch (e: any) {
+      alert(`❌ 다운로드 오류: ${e.message}`);
     } finally {
       setSyncLoading(false);
+    }
+  };
+
+  // Background auto-sync function
+  const triggerBackgroundUpload = async (
+    currentProgress: VerseProgress,
+    currentNotes: VerseNotes,
+    currentHistory: StudyRecord[],
+    currentCompleted: { [key: number]: boolean }
+  ) => {
+    const username = localStorage.getItem("rev_username");
+    const token = localStorage.getItem("rev_token");
+    if (!username || !token) return;
+    try {
+      await fetch("/api/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username,
+          token,
+          progress: currentProgress,
+          notes: currentNotes,
+          studyHistory: currentHistory,
+          completedDays: currentCompleted
+        })
+      });
+      const nowStr = new Date().toLocaleString();
+      setLastSyncTime(nowStr);
+      localStorage.setItem("rev_last_sync_time", nowStr);
+    } catch (e) {
+      console.error("Background auto sync failed", e);
     }
   };
 
@@ -955,82 +1030,75 @@ export default function RevelationMemorizer() {
                 {/* Left side: Cloud Synchronization (PC <-> Mobile) */}
                 <div className="space-y-4">
                   <h3 className="text-base font-bold text-emerald-400 flex items-center gap-2">
-                    🔄 기기간 클라우드 동기화 (PC ↔ 모바일)
+                    🔑 기기간 계정 동기화 (PC ↔ 모바일 ↔ 태블릿)
                   </h3>
                   <p className="text-xs text-zinc-400 leading-relaxed">
-                    컴퓨터와 스마트폰 간에 암송 진도를 실시간으로 동기화합니다. 무료 클라우드 저장소(kvdb.io) 연동을 통해 로그인 가입 없이 **이메일 인증 1회**만으로 개별 동기화 코드가 활성화됩니다.
+                    나만의 아이디와 비밀번호로 로그인하여 여러 기기에서 학습 진도를 실시간으로 동기화합니다. 학습을 진행하면 **배경에서 자동으로 저장**되어 간편합니다.
                   </p>
 
-                  {!syncBucketId ? (
-                    // Setup Sync Code
-                    <div className="space-y-4 pt-2">
+                  {!isLoggedIn ? (
+                    // Login / Register Form
+                    <form onSubmit={isRegisterMode ? handleRegister : handleLogin} className="space-y-3 pt-2">
                       <div className="space-y-1">
-                        <label className="block text-[11px] text-zinc-400">1. 새 동기화 코드 신청 (이메일 주소 입력)</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="email"
-                            placeholder="your-email@example.com"
-                            value={syncEmail}
-                            onChange={(e) => setSyncEmail(e.target.value)}
-                            disabled={syncLoading}
-                            className={`flex-1 px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-50 border-slate-200 text-slate-800"}`}
-                          />
-                          <button
-                            onClick={handleRegisterSyncBucket}
-                            disabled={syncLoading}
-                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold rounded-xl whitespace-nowrap transition-colors"
-                          >
-                            {syncLoading ? "신청 중..." : "코드 발급 신청"}
-                          </button>
-                        </div>
+                        <label className="block text-[11px] text-zinc-400">아이디</label>
+                        <input
+                          type="text"
+                          placeholder="사용할 아이디를 입력하세요"
+                          value={loginId}
+                          onChange={(e) => setLoginId(e.target.value)}
+                          disabled={syncLoading}
+                          className={`w-full px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-50 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                        />
                       </div>
 
-                      <div className="space-y-1 pt-1">
-                        <label className="block text-[11px] text-zinc-400">또는 2. 기존 발급받은 코드 입력 (모바일 기기 등록 시)</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            placeholder="발급받은 동기화 코드를 붙여넣으세요"
-                            value={syncBucketId}
-                            onChange={(e) => setSyncBucketId(e.target.value)}
-                            className={`flex-1 px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-50 border-slate-200 text-slate-800"}`}
-                          />
-                          <button
-                            onClick={handleLinkExistingCode}
-                            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-bold rounded-xl whitespace-nowrap transition-colors"
-                          >
-                            코드 연동 등록
-                          </button>
-                        </div>
+                      <div className="space-y-1">
+                        <label className="block text-[11px] text-zinc-400">비밀번호</label>
+                        <input
+                          type="password"
+                          placeholder="비밀번호를 입력하세요"
+                          value={loginPw}
+                          onChange={(e) => setLoginPw(e.target.value)}
+                          disabled={syncLoading}
+                          className={`w-full px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-50 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                        />
                       </div>
-                    </div>
+
+                      <div className="flex flex-col gap-2 pt-1">
+                        <button
+                          type="submit"
+                          disabled={syncLoading}
+                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition-colors"
+                        >
+                          {syncLoading ? "처리 중..." : isRegisterMode ? "회원가입하기" : "로그인하기"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsRegisterMode(!isRegisterMode);
+                            setLoginPw("");
+                          }}
+                          className="text-[11px] text-zinc-400 hover:text-zinc-200 text-center underline"
+                        >
+                          {isRegisterMode ? "이미 계정이 있으신가요? 로그인으로 이동" : "계정이 없으신가요? 회원가입으로 이동"}
+                        </button>
+                      </div>
+                    </form>
                   ) : (
-                    // Linked Sync Actions
+                    // Logged In Status & Manual Sync Actions
                     <div className="space-y-3 pt-2">
-                      <div className="p-3.5 rounded-2xl bg-zinc-850/80 border border-zinc-800 text-xs space-y-1.5">
-                        <div className="flex justify-between">
-                          <span className="text-zinc-400">내 고유 동기화 코드:</span>
-                          <span className="font-mono font-bold text-amber-400 select-all">{syncBucketId}</span>
+                      <div className="p-3.5 rounded-2xl bg-zinc-800/40 border border-zinc-800/60 text-xs space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-zinc-400">로그인 계정:</span>
+                          <span className="font-bold text-emerald-400 text-sm">👤 {loggedInUser}</span>
                         </div>
-                        {syncEmail && (
-                          <div className="flex justify-between">
-                            <span className="text-zinc-400">연동된 이메일:</span>
-                            <span className="text-zinc-200 font-semibold">{syncEmail}</span>
-                          </div>
-                        )}
-                        {lastSyncTime && (
-                          <div className="flex justify-between text-[11px]">
-                            <span className="text-zinc-400">최근 동기화 일시:</span>
-                            <span className="text-zinc-300 font-medium">{lastSyncTime}</span>
-                          </div>
-                        )}
+                        <div className="flex justify-between items-center text-[11px]">
+                          <span className="text-zinc-400">최근 서버 동기화:</span>
+                          <span className="text-zinc-300 font-semibold">{lastSyncTime || "진행 기록 없음"}</span>
+                        </div>
+                        <div className="text-[10px] text-zinc-500 leading-relaxed pt-1 border-t border-zinc-800/50">
+                          ✨ 공부 상태 변경 시 백그라운드에서 자동으로 클라우드에 백업 및 동기화됩니다.
+                        </div>
                       </div>
-
-                      {syncRequested && (
-                        <p className="text-[10px] text-rose-400/90 leading-relaxed font-semibold">
-                          ⚠️ 최초 업로드 시 이메일함에 수신된 &apos;Verify Email&apos; 인증 단추를 클릭해 주셔야 업로드가 활성화됩니다.
-                        </p>
-                      )}
 
                       <div className="flex flex-wrap gap-2 pt-1">
                         <button
@@ -1038,21 +1106,21 @@ export default function RevelationMemorizer() {
                           disabled={syncLoading}
                           className="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap"
                         >
-                          📤 현재 기록 클라우드 업로드
+                          📤 진행상황 수동 백업 (업로드)
                         </button>
                         <button
                           onClick={handleDownloadAndMerge}
                           disabled={syncLoading}
                           className="flex-1 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap"
                         >
-                          📥 클라우드 기록 내려받아 병합
+                          📥 서버 기록 가져와 병합 (다운로드)
                         </button>
                         <button
-                          onClick={handleDisconnectSync}
-                          className="px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-400 text-xs font-bold rounded-xl transition-colors"
-                          title="동기화 연결 해제"
+                          onClick={handleLogout}
+                          className="px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-400 hover:text-zinc-200 text-xs font-bold rounded-xl transition-colors"
+                          title="로그아웃"
                         >
-                          연결 끊기
+                          로그아웃
                         </button>
                       </div>
                     </div>
