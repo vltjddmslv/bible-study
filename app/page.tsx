@@ -27,48 +27,58 @@ export default function RevelationMemorizer() {
   const [progress, setProgress] = useState<VerseProgress>({});
   const [notes, setNotes] = useState<VerseNotes>({});
   const [studyHistory, setStudyHistory] = useState<StudyRecord[]>([]);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "learn" | "blank" | "typing" | "read">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "planner" | "read" | "practice">("dashboard");
   const [selectedChapter, setSelectedChapter] = useState<number>(1);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [darkMode, setDarkMode] = useState<boolean>(true);
 
-  // Learn Tab State
-  const [currentVerseIndex, setCurrentVerseIndex] = useState<number>(0);
-  const [isFlipped, setIsFlipped] = useState<boolean>(false);
-  const [filterStatus, setFilterStatus] = useState<"all" | ProgressStatus>("all");
+  // --- Daily Planner States ---
+  const [completedDays, setCompletedDays] = useState<{ [key: number]: boolean }>({});
+  const [activeDay, setActiveDay] = useState<number | null>(null);
+  const [dayStudyStep, setDayStudyStep] = useState<"study" | "test" | "complete">("study");
+  const [dayTestAnswers, setDayTestAnswers] = useState<string[]>(["", "", "", "", ""]);
+  const [dayTestMode, setDayTestMode] = useState<"initial" | "full">("initial");
+  const [activeTestVerseIdx, setActiveTestVerseIdx] = useState<number>(0);
+  const [revealStudyText, setRevealStudyText] = useState<boolean[]>([true, true, true, true, true]);
 
-  // Blank Tab State
+  // --- Practice Tab States (Self Learning) ---
+  const [practiceSubTab, setPracticeSubTab] = useState<"card" | "blank" | "typing">("card");
+  const [currentPracticeIndex, setCurrentPracticeIndex] = useState<number>(0);
+  const [isPracticeCardFlipped, setIsPracticeCardFlipped] = useState<boolean>(false);
+  const [practiceFilterStatus, setPracticeFilterStatus] = useState<"all" | ProgressStatus>("all");
+
+  // Blank Sub-State
   const [blankDifficulty, setBlankDifficulty] = useState<"easy" | "medium" | "hard">("medium");
-  const [revealedBlanks, setRevealedBlanks] = useState<number[]>([]); // indexes of revealed words
+  const [revealedBlanks, setRevealedBlanks] = useState<number[]>([]);
 
-  // Typing Tab State
+  // Typing Sub-State
   const [typingMode, setTypingMode] = useState<"initial" | "full">("initial");
-  const [userInput, setUserInput] = useState<string>("");
-  const [showTypingAnswer, setShowTypingAnswer] = useState<boolean>(false);
+  const [practiceUserInput, setPracticeUserInput] = useState<string>("");
+  const [showPracticeAnswer, setShowPracticeAnswer] = useState<boolean>(false);
 
-  // Read/TTS Tab State
+  // --- TTS State ---
   const [isPlayingTTS, setIsPlayingTTS] = useState<boolean>(false);
   const [ttsSpeed, setTtsSpeed] = useState<number>(1.0);
-  const [activeTtsVerse, setActiveTtsVerse] = useState<string | null>(null); // "chapter:verse"
+  const [activeTtsVerse, setActiveTtsVerse] = useState<string | null>(null);
   const [autoPlayTts, setAutoPlayTts] = useState<boolean>(false);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   // --- Initialize LocalStorage and TTS ---
   useEffect(() => {
-    // Load local storage data
     const savedProgress = localStorage.getItem("rev_progress");
     const savedNotes = localStorage.getItem("rev_notes");
     const savedHistory = localStorage.getItem("rev_history");
     const savedTheme = localStorage.getItem("rev_theme");
+    const savedCompletedDays = localStorage.getItem("rev_completed_days");
 
     if (savedProgress) setProgress(JSON.parse(savedProgress));
     if (savedNotes) setNotes(JSON.parse(savedNotes));
     if (savedHistory) setStudyHistory(JSON.parse(savedHistory));
+    if (savedCompletedDays) setCompletedDays(JSON.parse(savedCompletedDays));
     if (savedTheme) {
       setDarkMode(savedTheme === "dark");
     } else {
-      // Default to dark mode
       setDarkMode(true);
     }
 
@@ -94,7 +104,7 @@ export default function RevelationMemorizer() {
     localStorage.setItem("rev_theme", darkMode ? "dark" : "light");
   }, [darkMode]);
 
-  // Helper to save progress helper
+  // Helper to save progress
   const saveProgress = (newProgress: VerseProgress) => {
     setProgress(newProgress);
     localStorage.setItem("rev_progress", JSON.stringify(newProgress));
@@ -127,39 +137,26 @@ export default function RevelationMemorizer() {
     localStorage.setItem("rev_notes", JSON.stringify(newNotes));
   };
 
-  // --- Filtering & Memoized Lists ---
-  const filteredVerses = useMemo(() => {
-    return REVELATION_VERSES.filter((v) => {
-      // Chapter filter
-      if (selectedChapter !== 0 && v.chapter !== selectedChapter) return false;
+  // --- Partition Revelation into 81 Days (5 verses per day) ---
+  const getVersesForDay = (day: number): BibleVerse[] => {
+    const startIdx = (day - 1) * 5;
+    const endIdx = Math.min(day * 5, REVELATION_VERSES.length);
+    return REVELATION_VERSES.slice(startIdx, endIdx);
+  };
 
-      // Status filter
-      const key = `${v.chapter}:${v.verse}`;
-      const vStatus = progress[key] || "unlearned";
-      if (filterStatus !== "all" && vStatus !== filterStatus) return false;
+  const handleCompleteDay = (day: number) => {
+    const newCompleted = { ...completedDays, [day]: true };
+    setCompletedDays(newCompleted);
+    localStorage.setItem("rev_completed_days", JSON.stringify(newCompleted));
 
-      // Search query filter
-      if (searchQuery.trim() !== "") {
-        const query = searchQuery.toLowerCase();
-        const matchesText = v.text.toLowerCase().includes(query);
-        const matchesRef = `${v.chapter}장 ${v.verse}절`.includes(query) || `${v.chapter}:${v.verse}`.includes(query);
-        const matchesNote = (notes[key] || "").toLowerCase().includes(query);
-        if (!matchesText && !matchesRef && !matchesNote) return false;
-      }
-
-      return true;
+    // Mark all verses in this day as learned
+    const dayVerses = getVersesForDay(day);
+    const newProgress = { ...progress };
+    dayVerses.forEach((v) => {
+      newProgress[`${v.chapter}:${v.verse}`] = "learned";
     });
-  }, [selectedChapter, filterStatus, searchQuery, progress, notes]);
-
-  // Keep index in bounds when filtered list changes
-  useEffect(() => {
-    setCurrentVerseIndex(0);
-    setIsFlipped(false);
-    setUserInput("");
-    setRevealedBlanks([]);
-  }, [selectedChapter, filterStatus, searchQuery]);
-
-  const currentVerse: BibleVerse | undefined = filteredVerses[currentVerseIndex];
+    saveProgress(newProgress);
+  };
 
   // --- Korean Initial Consonant Extractor (초성) ---
   const getInitials = (text: string): string => {
@@ -175,47 +172,21 @@ export default function RevelationMemorizer() {
         const initialIdx = Math.floor(code / 588);
         result += KOREAN_INITIALS[initialIdx];
       } else {
-        // Keep whitespace and punctuation as is
         result += text[i];
       }
     }
     return result;
   };
 
-  // --- Dynamic Blank Masking Generator ---
-  const blankedWords = useMemo(() => {
-    if (!currentVerse) return [];
-    const words = currentVerse.text.split(" ");
-    
-    // Deterministic mask based on verse key and selected difficulty
-    return words.map((word, idx) => {
-      // Strip punctuation for matching logic but keep it for display
-      const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
-      
-      // Short helper words are masked less
-      if (cleanWord.length <= 1) return { text: word, isMasked: false };
-      
-      let step = 3; // Easy: mask every 3rd word
-      if (blankDifficulty === "medium") step = 2; // Medium: mask every 2nd word
-      if (blankDifficulty === "hard") step = 1.2; // Hard: mask almost everything
-      
-      const shouldMask = (idx + currentVerse.verse) % step < 1;
-      return {
-        text: word,
-        isMasked: shouldMask
-      };
-    });
-  }, [currentVerse, blankDifficulty]);
-
   // --- Text-to-Speech Controls ---
-  const playTTS = (text: string, verseKey: string) => {
+  const playTTS = (text: string, verseKey: string, onEndCallback?: () => void) => {
     if (!synthRef.current) return;
 
     if (isPlayingTTS) {
       synthRef.current.cancel();
     }
 
-    const cleanText = text.replace(/\[\d+:\d+\]/g, ""); // strip markers
+    const cleanText = text.replace(/\[\d+:\d+\]/g, "");
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = "ko-KR";
     utterance.rate = ttsSpeed;
@@ -229,16 +200,17 @@ export default function RevelationMemorizer() {
       setIsPlayingTTS(false);
       setActiveTtsVerse(null);
       
-      // Auto play next verse logic
-      if (autoPlayTts && currentVerseIndex < filteredVerses.length - 1) {
-        setCurrentVerseIndex((prev) => prev + 1);
-        // Play next in microtask to let index state resolve
-        setTimeout(() => {
-          const next = filteredVerses[currentVerseIndex + 1];
-          if (next) {
+      if (onEndCallback) {
+        onEndCallback();
+      } else if (autoPlayTts && activeTab === "read") {
+        // Auto-play next logic in normal reading tab
+        const currentIdx = filteredVerses.findIndex(v => `${v.chapter}:${v.verse}` === verseKey);
+        if (currentIdx >= 0 && currentIdx < filteredVerses.length - 1) {
+          const next = filteredVerses[currentIdx + 1];
+          setTimeout(() => {
             playTTS(next.text, `${next.chapter}:${next.verse}`);
-          }
-        }, 100);
+          }, 100);
+        }
       }
     };
 
@@ -259,29 +231,72 @@ export default function RevelationMemorizer() {
     }
   };
 
-  // --- Typing Matching feedback helper ---
-  const getTypingFeedback = () => {
-    if (!currentVerse) return null;
-    const target = typingMode === "initial" ? getInitials(currentVerse.text) : currentVerse.text;
-    
-    // Normalize spaces and characters
-    const normalizedInput = userInput.trim().replace(/\s+/g, " ");
+  // --- Filtered verses for Reading and Practice tabs ---
+  const filteredVerses = useMemo(() => {
+    return REVELATION_VERSES.filter((v) => {
+      if (selectedChapter !== 0 && v.chapter !== selectedChapter) return false;
+
+      const key = `${v.chapter}:${v.verse}`;
+      const status = progress[key] || "unlearned";
+
+      if (activeTab === "practice") {
+        if (practiceFilterStatus !== "all" && status !== practiceFilterStatus) return false;
+      }
+
+      if (searchQuery.trim() !== "") {
+        const query = searchQuery.toLowerCase();
+        const matchesText = v.text.toLowerCase().includes(query);
+        const matchesRef = `${v.chapter}장 ${v.verse}절`.includes(query) || `${v.chapter}:${v.verse}`.includes(query);
+        const matchesNote = (notes[key] || "").toLowerCase().includes(query);
+        if (!matchesText && !matchesRef && !matchesNote) return false;
+      }
+
+      return true;
+    });
+  }, [selectedChapter, practiceFilterStatus, searchQuery, progress, notes, activeTab]);
+
+  // Reset index when search/filter changes
+  useEffect(() => {
+    setCurrentPracticeIndex(0);
+    setIsPracticeCardFlipped(false);
+    setPracticeUserInput("");
+    setRevealedBlanks([]);
+  }, [selectedChapter, practiceFilterStatus, searchQuery, activeTab]);
+
+  const currentPracticeVerse: BibleVerse | undefined = filteredVerses[currentPracticeIndex];
+
+  // Consonants for custom blank masking
+  const blankedPracticeWords = useMemo(() => {
+    if (!currentPracticeVerse) return [];
+    const words = currentPracticeVerse.text.split(" ");
+    return words.map((word, idx) => {
+      const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+      if (cleanWord.length <= 1) return { text: word, isMasked: false };
+      
+      let step = 3;
+      if (blankDifficulty === "medium") step = 2;
+      if (blankDifficulty === "hard") step = 1.2;
+      
+      const shouldMask = (idx + currentPracticeVerse.verse) % step < 1;
+      return { text: word, isMasked: shouldMask };
+    });
+  }, [currentPracticeVerse, blankDifficulty]);
+
+  // Typing validator helper
+  const getTypingFeedback = (input: string, originalText: string, mode: "initial" | "full") => {
+    const target = mode === "initial" ? getInitials(originalText) : originalText;
+    const normalizedInput = input.trim().replace(/\s+/g, " ");
     const normalizedTarget = target.trim().replace(/\s+/g, " ");
 
     if (normalizedInput === "") return null;
 
-    let isMatch = normalizedTarget.startsWith(normalizedInput);
-    let isComplete = normalizedTarget === normalizedInput;
+    const isMatch = normalizedTarget.startsWith(normalizedInput);
+    const isComplete = normalizedTarget === normalizedInput;
 
-    return {
-      isMatch,
-      isComplete,
-      targetLength: normalizedTarget.length,
-      inputLength: normalizedInput.length
-    };
+    return { isMatch, isComplete };
   };
 
-  // --- Progress Stats Calculation ---
+  // --- Statistics ---
   const stats = useMemo(() => {
     const total = REVELATION_VERSES.length;
     let learned = 0;
@@ -298,7 +313,6 @@ export default function RevelationMemorizer() {
 
     const percent = total > 0 ? Math.round((learned / total) * 100) : 0;
     
-    // Chapter breakdown
     const chapterStats = Array.from({ length: 22 }, (_, i) => {
       const chNum = i + 1;
       const chVerses = REVELATION_VERSES.filter((v) => v.chapter === chNum);
@@ -325,14 +339,14 @@ export default function RevelationMemorizer() {
     };
   }, [progress]);
 
-  // Calculate Streak
+  // Streak calculator
   const currentStreak = useMemo(() => {
     if (studyHistory.length === 0) return 0;
     
     const dates = studyHistory
       .filter((r) => r.count > 0)
       .map((r) => r.date)
-      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime()); // descending order (newest first)
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
       
     if (dates.length === 0) return 0;
     
@@ -341,7 +355,6 @@ export default function RevelationMemorizer() {
     yesterday.setDate(yesterday.getDate() - 1);
     const yesterdayStr = yesterday.toISOString().split("T")[0];
 
-    // If they haven't studied today or yesterday, streak is broken
     if (dates[0] !== todayStr && dates[0] !== yesterdayStr) return 0;
 
     let streak = 1;
@@ -356,11 +369,38 @@ export default function RevelationMemorizer() {
         streak++;
         currentDate = nextDate;
       } else if (diffDays > 1) {
-        break; // Streak broken
+        break;
       }
     }
     return streak;
   }, [studyHistory]);
+
+  // --- Day Study & Test Helpers ---
+  const activeDayVerses = useMemo(() => {
+    if (activeDay === null) return [];
+    return getVersesForDay(activeDay);
+  }, [activeDay]);
+
+  const handleStartDay = (dayNum: number) => {
+    setActiveDay(dayNum);
+    setDayStudyStep("study");
+    setDayTestAnswers(["", "", "", "", ""]);
+    setRevealStudyText([true, true, true, true, true]);
+    setActiveTestVerseIdx(0);
+    stopTTS();
+  };
+
+  const handleGoToTest = () => {
+    setDayStudyStep("test");
+    setDayTestAnswers(["", "", "", "", ""]);
+    setActiveTestVerseIdx(0);
+    stopTTS();
+  };
+
+  const activeTestVerse = activeDayVerses[activeTestVerseIdx];
+  const activeTestFeedback = activeTestVerse
+    ? getTypingFeedback(dayTestAnswers[activeTestVerseIdx], activeTestVerse.text, dayTestMode)
+    : null;
 
   return (
     <div className={`min-h-screen transition-colors duration-300 font-sans ${darkMode ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-slate-900"}`}>
@@ -375,45 +415,39 @@ export default function RevelationMemorizer() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">요한계시록 암기 플래너</h1>
-              <p className="text-xs text-zinc-400">말씀 마음에 새기기 - 22장 404구절 전체 내장형</p>
+              <p className="text-xs text-zinc-400">성경 공부 및 암송 시험 점검 최적화 프로그램</p>
             </div>
           </div>
 
           {/* Navigation Tabs */}
           <nav className="flex bg-zinc-800/50 p-1 rounded-lg border border-zinc-700/50 text-xs sm:text-sm">
             <button
-              onClick={() => setActiveTab("dashboard")}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "dashboard" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              onClick={() => { setActiveTab("dashboard"); setActiveDay(null); stopTTS(); }}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "dashboard" && activeDay === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
             >
               대시보드
             </button>
             <button
-              onClick={() => setActiveTab("learn")}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "learn" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              onClick={() => { setActiveTab("planner"); stopTTS(); }}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "planner" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
             >
-              플래시카드
+              일일 플래너
             </button>
             <button
-              onClick={() => setActiveTab("blank")}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "blank" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
-            >
-              빈칸연습
-            </button>
-            <button
-              onClick={() => setActiveTab("typing")}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "typing" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
-            >
-              타이핑테스트
-            </button>
-            <button
-              onClick={() => setActiveTab("read")}
+              onClick={() => { setActiveTab("read"); setActiveDay(null); stopTTS(); }}
               className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "read" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
             >
-              성경독서
+              성경 학습 (1~22장)
+            </button>
+            <button
+              onClick={() => { setActiveTab("practice"); setActiveDay(null); stopTTS(); }}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "practice" ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+            >
+              개별 훈련
             </button>
           </nav>
 
-          {/* Theme & Actions */}
+          {/* Theme Switcher */}
           <div className="flex items-center gap-3">
             <button
               onClick={() => setDarkMode(!darkMode)}
@@ -433,12 +467,11 @@ export default function RevelationMemorizer() {
       {/* --- MAIN LAYOUT --- */}
       <main className="max-w-7xl mx-auto px-4 py-6">
         
-        {/* --- GLOBAL SEARCH & CHAPTER BAR --- */}
-        {activeTab !== "dashboard" && (
-          <div className={`p-4 mb-6 rounded-2xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-850" : "bg-white border-slate-200 shadow-sm"}`}>
+        {/* --- GLOBAL SEARCH & CHAPTER BAR (Only visible on Read and Practice tabs) --- */}
+        {(activeTab === "read" || activeTab === "practice") && (
+          <div className={`p-4 mb-6 rounded-2xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               
-              {/* Chapter selection drop down & query */}
               <div className="flex items-center gap-3 flex-wrap">
                 <div>
                   <label className="block text-xs font-semibold text-zinc-400 mb-1">장 선택</label>
@@ -456,28 +489,29 @@ export default function RevelationMemorizer() {
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-zinc-400 mb-1">암기 상태 필터</label>
-                  <select
-                    value={filterStatus}
-                    onChange={(e) => setFilterStatus(e.target.value as any)}
-                    className={`px-3 py-2 rounded-xl border font-medium outline-none text-sm ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-100 border-slate-200 text-slate-800"}`}
-                  >
-                    <option value="all">전체 상태</option>
-                    <option value="unlearned">🔴 미학습</option>
-                    <option value="reviewing">🟡 복습 중</option>
-                    <option value="learned">🟢 암기 완료</option>
-                  </select>
-                </div>
+                {activeTab === "practice" && (
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-1">훈련 상태 필터</label>
+                    <select
+                      value={practiceFilterStatus}
+                      onChange={(e) => setPracticeFilterStatus(e.target.value as any)}
+                      className={`px-3 py-2 rounded-xl border font-medium outline-none text-sm ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-100 border-slate-200 text-slate-800"}`}
+                    >
+                      <option value="all">전체 구절</option>
+                      <option value="unlearned">🔴 미학습</option>
+                      <option value="reviewing">🟡 복습 중</option>
+                      <option value="learned">🟢 암기 완료</option>
+                    </select>
+                  </div>
+                )}
               </div>
 
-              {/* Real-time search */}
               <div className="flex-1 max-w-md">
-                <label className="block text-xs font-semibold text-zinc-400 mb-1">구절 및 메모 검색</label>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1">구절 본문 및 메모 검색</label>
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder="예: 생명나무, 새 예루살렘, 12:1..."
+                    placeholder="예: 생명수, 새 예루살렘, 1:1, 22:21..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className={`w-full pl-10 pr-4 py-2 rounded-xl border outline-none text-sm transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
@@ -486,10 +520,7 @@ export default function RevelationMemorizer() {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                   </div>
                   {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery("")}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200"
-                    >
+                    <button onClick={() => setSearchQuery("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200">
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                     </button>
                   )}
@@ -497,16 +528,13 @@ export default function RevelationMemorizer() {
               </div>
             </div>
 
-            {/* Sub-status counts */}
-            <div className="mt-4 pt-3 border-t border-zinc-800/50 flex items-center justify-between text-xs text-zinc-400">
+            <div className="mt-4 pt-3 border-t border-zinc-800/40 flex items-center justify-between text-xs text-zinc-400">
               <div>
-                검색 필터 결과: <span className="font-semibold text-emerald-400">{filteredVerses.length}</span>구절 / 전체 404구절
+                검색된 구절 수: <span className="font-semibold text-emerald-400">{filteredVerses.length}</span>구절 / 전체 404구절
               </div>
-              {filteredVerses.length > 0 && activeTab !== "read" && (
-                <div className="flex gap-2">
-                  <span className="bg-zinc-800 px-2 py-1 rounded">
-                    현재 구절 위치: {currentVerseIndex + 1} / {filteredVerses.length}
-                  </span>
+              {filteredVerses.length > 0 && activeTab === "practice" && (
+                <div>
+                  구절 위치: {currentPracticeIndex + 1} / {filteredVerses.length}
                 </div>
               )}
             </div>
@@ -514,579 +542,523 @@ export default function RevelationMemorizer() {
         )}
 
         {/* --- TAB 1: DASHBOARD --- */}
-        {activeTab === "dashboard" && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            
-            {/* Left: Overall stats card */}
-            <div className={`p-6 rounded-3xl border lg:col-span-1 flex flex-col justify-between transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-              <div>
-                <h3 className="text-lg font-bold mb-4">전체 암송 진척도</h3>
-                
-                {/* Visual circular progress or big number */}
-                <div className="flex items-center justify-center py-6">
-                  <div className="relative w-40 h-40">
-                    <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
-                      {/* background circle */}
-                      <circle
-                        className={`${darkMode ? "text-zinc-800" : "text-slate-100"}`}
-                        strokeWidth="10"
-                        stroke="currentColor"
-                        fill="transparent"
-                        r="38"
-                        cx="50"
-                        cy="50"
-                      />
-                      {/* progress circle */}
-                      <circle
-                        className="text-emerald-500 transition-all duration-1000 ease-out"
-                        strokeWidth="10"
-                        strokeDasharray={2 * Math.PI * 38}
-                        strokeDashoffset={2 * Math.PI * 38 * (1 - stats.percent / 100)}
-                        strokeLinecap="round"
-                        stroke="currentColor"
-                        fill="transparent"
-                        r="38"
-                        cx="50"
-                        cy="50"
-                      />
-                    </svg>
-                    <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-4xl font-extrabold">{stats.percent}%</span>
-                      <span className="text-xs text-zinc-400 mt-1">암기 완료</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Details list */}
-                <div className="space-y-3 mt-4">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="flex items-center gap-2 text-zinc-400">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>암기 완료
-                    </span>
-                    <span className="font-bold">{stats.learned} 구절</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="flex items-center gap-2 text-zinc-400">
-                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>복습 필요
-                    </span>
-                    <span className="font-bold">{stats.reviewing} 구절</span>
-                  </div>
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="flex items-center gap-2 text-zinc-400">
-                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>미학습
-                    </span>
-                    <span className="font-bold">{stats.unlearned} / {stats.total} 구절</span>
-                  </div>
+        {activeTab === "dashboard" && activeDay === null && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Quick summary header banner */}
+            <div className="p-6 rounded-3xl bg-gradient-to-r from-emerald-800/80 to-teal-700/80 text-white shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
+              <div className="space-y-2 text-center md:text-left">
+                <h2 className="text-2xl font-black">📖 매일 5구절 암송 플래너</h2>
+                <p className="text-zinc-100 text-sm max-w-xl">
+                  요한계시록 전체 22장 404구절을 하루에 5구절씩 81일간 체계적으로 학습하고 점검할 수 있도록 완성된 일일 플래너입니다. 말씀을 매일 마음에 깊이 새겨보세요.
+                </p>
+                <div className="flex gap-2 justify-center md:justify-start pt-2">
+                  <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🎯 하루 5구절 목표</span>
+                  <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🗓️ 81일 과정</span>
+                  <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🔊 오디오 낭독 탑재</span>
                 </div>
               </div>
-
-              {/* Streak Card */}
-              <div className="mt-6 p-4 rounded-2xl bg-gradient-to-tr from-amber-600/10 to-emerald-600/10 border border-emerald-500/20 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="text-2xl">🔥</div>
-                  <div>
-                    <h4 className="text-sm font-bold">연속 학습 스트리크</h4>
-                    <p className="text-xs text-zinc-400">매일 성경 말씀을 암송해 보세요</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <span className="text-3xl font-extrabold text-amber-500">{currentStreak}</span>
-                  <span className="text-xs text-zinc-400 ml-1">일째</span>
-                </div>
-              </div>
+              <button
+                onClick={() => setActiveTab("planner")}
+                className="px-6 py-3 rounded-2xl bg-white text-emerald-800 font-extrabold text-sm hover:scale-105 transition-all shadow-md"
+              >
+                📅 플래너 시작하기
+              </button>
             </div>
 
-            {/* Right: Chapter list breakdown */}
-            <div className={`p-6 rounded-3xl border lg:col-span-2 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-bold">장별 진척 현황</h3>
-                <span className="text-xs text-zinc-400">클릭하여 해당 장으로 빠른 학습 이동</span>
-              </div>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 max-h-[420px] overflow-y-auto pr-2 custom-scrollbar">
-                {stats.chapterStats.map((ch) => (
-                  <button
-                    key={ch.chapter}
-                    onClick={() => {
-                      setSelectedChapter(ch.chapter);
-                      setActiveTab("learn");
-                    }}
-                    className={`p-3 rounded-2xl border text-left transition-all duration-200 hover:scale-[1.02] ${darkMode ? "bg-zinc-800/40 border-zinc-700/60 hover:bg-zinc-800" : "bg-slate-50 border-slate-200 hover:bg-slate-100"}`}
-                  >
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-bold text-sm">{ch.chapter}장</span>
-                      <span className="text-xs font-semibold text-emerald-400">{ch.percent}%</span>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Left Column: Progress circle */}
+              <div className={`p-6 rounded-3xl border flex flex-col justify-between transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                <div>
+                  <h3 className="text-base font-bold mb-4">전체 요한계시록 암송 현황</h3>
+                  <div className="flex items-center justify-center py-6">
+                    <div className="relative w-40 h-40">
+                      <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                        <circle className={`${darkMode ? "text-zinc-800" : "text-slate-100"}`} strokeWidth="10" stroke="currentColor" fill="transparent" r="38" cx="50" cy="50"/>
+                        <circle className="text-emerald-500 transition-all duration-1000" strokeWidth="10" strokeDasharray={2*Math.PI*38} strokeDashoffset={2*Math.PI*38*(1 - stats.percent/100)} strokeLinecap="round" stroke="currentColor" fill="transparent" r="38" cx="50" cy="50"/>
+                      </svg>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center">
+                        <span className="text-4xl font-extrabold">{stats.percent}%</span>
+                        <span className="text-xs text-zinc-400 mt-1">암기 완료</span>
+                      </div>
                     </div>
-                    <div className="w-full bg-zinc-700/40 h-2 rounded-full overflow-hidden mb-1.5">
-                      <div
-                        className="bg-emerald-500 h-full rounded-full transition-all duration-500"
-                        style={{ width: `${ch.percent}%` }}
-                      ></div>
-                    </div>
-                    <div className="text-[10px] text-zinc-400 flex justify-between">
-                      <span>완료: {ch.learned}구절</span>
-                      <span>전체: {ch.total}구절</span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-              
-              {/* Quick Start Buttons */}
-              <div className="mt-6 flex flex-wrap gap-3">
-                <button
-                  onClick={() => {
-                    setSelectedChapter(1);
-                    setActiveTab("learn");
-                  }}
-                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-colors shadow-lg shadow-emerald-500/20"
-                >
-                  🚀 1장부터 암기 시작하기
-                </button>
-                <button
-                  onClick={() => {
-                    // Find first unlearned chapter
-                    const firstUnlearned = stats.chapterStats.find(c => c.percent < 100);
-                    setSelectedChapter(firstUnlearned ? firstUnlearned.chapter : 1);
-                    setActiveTab("learn");
-                  }}
-                  className="px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 font-semibold text-sm transition-colors"
-                >
-                  📖 이어서 복습하기
-                </button>
-              </div>
-            </div>
-
-          </div>
-        )}
-
-        {/* --- NO MATCHES FALLBACK FOR ACTIVE LEARNING TABS --- */}
-        {activeTab !== "dashboard" && filteredVerses.length === 0 && (
-          <div className="text-center py-16">
-            <div className="text-4xl mb-3">🔍</div>
-            <h3 className="text-lg font-bold">일치하는 성경 구절이 없습니다.</h3>
-            <p className="text-sm text-zinc-400 mt-1">필터를 조정하거나 다른 검색어를 입력해 보세요.</p>
-            <button
-              onClick={() => {
-                setSelectedChapter(1);
-                setFilterStatus("all");
-                setSearchQuery("");
-              }}
-              className="mt-4 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-sm rounded-xl"
-            >
-              필터 초기화
-            </button>
-          </div>
-        )}
-
-        {/* --- TAB 2: FLASHCARD LEARNING --- */}
-        {activeTab === "learn" && currentVerse && (
-          <div className="max-w-2xl mx-auto">
-            
-            {/* Flashcard container */}
-            <div className="perspective-1000 w-full min-h-[280px] mb-6 cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
-              <div className={`relative w-full h-full min-h-[280px] duration-500 preserve-3d ${isFlipped ? "rotate-y-180" : ""}`}>
-                
-                {/* Front of Card (Verse Reference) */}
-                <div className={`absolute inset-0 w-full h-full p-8 rounded-3xl border flex flex-col justify-between backface-hidden transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800 hover:border-zinc-750" : "bg-white border-slate-200 hover:border-slate-300 shadow-lg"}`}>
-                  <div className="flex justify-between items-center">
-                    <span className="px-3 py-1 text-xs rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
-                      요한계시록
-                    </span>
-                    <span className="text-xs text-zinc-400">클릭하여 펼치기</span>
                   </div>
 
-                  <div className="text-center my-auto py-8">
-                    <h2 className="text-4xl font-extrabold tracking-tight">
-                      {currentVerse.chapter}장 {currentVerse.verse}절
-                    </h2>
-                    <p className="text-zinc-500 text-sm mt-3">마음속으로 구절을 암송한 뒤 카드를 뒤집어 확인해 보세요.</p>
-                  </div>
-
-                  <div className="flex justify-between items-center text-xs text-zinc-400">
-                    <span>구절 번호: {currentVerseIndex + 1} / {filteredVerses.length}</span>
-                    <span className="flex items-center gap-1.5">
-                      상태: {progress[`${currentVerse.chapter}:${currentVerse.verse}`] === "learned" ? "🟢 암기완료" : progress[`${currentVerse.chapter}:${currentVerse.verse}`] === "reviewing" ? "🟡 복습중" : "🔴 미학습"}
-                    </span>
+                  <div className="space-y-3 mt-2">
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="flex items-center gap-2 text-zinc-400">
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>🟢 암기 완료
+                      </span>
+                      <span className="font-bold">{stats.learned} 구절</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="flex items-center gap-2 text-zinc-400">
+                        <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>🟡 복습 중
+                      </span>
+                      <span className="font-bold">{stats.reviewing} 구절</span>
+                    </div>
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="flex items-center gap-2 text-zinc-400">
+                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>🔴 미학습
+                      </span>
+                      <span className="font-bold">{stats.unlearned} / {stats.total} 구절</span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Back of Card (Verse Text) */}
-                <div className={`absolute inset-0 w-full h-full p-8 rounded-3xl border flex flex-col justify-between rotate-y-180 backface-hidden transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-lg"}`}>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-bold text-emerald-400">
-                      {currentVerse.chapter}장 {currentVerse.verse}절
-                    </span>
+                {/* Streak and Study Days info */}
+                <div className="mt-6 p-4 rounded-2xl bg-gradient-to-tr from-amber-600/10 to-emerald-600/10 border border-emerald-500/20 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="text-2xl">🔥</div>
+                    <div>
+                      <h4 className="text-sm font-bold">연속 학습 일수</h4>
+                      <p className="text-xs text-zinc-400">매일 빼놓지 않고 암송하세요!</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-3xl font-extrabold text-amber-500">{currentStreak}</span>
+                    <span className="text-xs text-zinc-400 ml-1">일째</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Chapter Progress Cards */}
+              <div className={`p-6 rounded-3xl border lg:col-span-2 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-base font-bold">장별 상세 진행 진도</h3>
+                  <span className="text-xs text-zinc-400">클릭 시 해당 장 학습 모드로 이동</span>
+                </div>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 max-h-[380px] overflow-y-auto pr-2 custom-scrollbar">
+                  {stats.chapterStats.map((ch) => (
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation(); // prevent card flip
-                        playTTS(currentVerse.text, `${currentVerse.chapter}:${currentVerse.verse}`);
-                      }}
-                      className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-zinc-400 hover:text-zinc-200 transition-colors"
-                      title="구절 읽어주기"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.536 8.464a5 5 0 010 7.072M18.364 5.636a9 9 0 010 12.728M12 18.75V5.25L7.75 9.5H4.5v5h3.25L12 18.75z"></path></svg>
-                    </button>
-                  </div>
-
-                  <div className="my-auto py-4">
-                    <p className="text-xl sm:text-2xl leading-relaxed font-medium text-center break-keep tracking-wide">
-                      {currentVerse.text}
-                    </p>
-                  </div>
-
-                  {/* Status Indicator */}
-                  <div className="text-right text-xs text-zinc-400">
-                    클릭하여 다시 카드 뒤집기
-                  </div>
-                </div>
-
-              </div>
-            </div>
-
-            {/* Quick Status Setting Buttons */}
-            <div className="grid grid-cols-3 gap-3 mb-6">
-              <button
-                onClick={() => handleUpdateStatus(currentVerse.chapter, currentVerse.verse, "unlearned")}
-                className={`py-3 rounded-2xl border font-bold text-xs sm:text-sm transition-all duration-200 ${progress[`${currentVerse.chapter}:${currentVerse.verse}`] === "unlearned" || !progress[`${currentVerse.chapter}:${currentVerse.verse}`] ? "bg-rose-600 border-rose-500 text-white shadow-lg shadow-rose-500/20" : "bg-zinc-850 hover:bg-zinc-800 border-zinc-750 text-rose-500"}`}
-              >
-                🔴 미학습으로 분류
-              </button>
-              <button
-                onClick={() => handleUpdateStatus(currentVerse.chapter, currentVerse.verse, "reviewing")}
-                className={`py-3 rounded-2xl border font-bold text-xs sm:text-sm transition-all duration-200 ${progress[`${currentVerse.chapter}:${currentVerse.verse}`] === "reviewing" ? "bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-500/20" : "bg-zinc-850 hover:bg-zinc-800 border-zinc-750 text-amber-500"}`}
-              >
-                🟡 복습 중으로 분류
-              </button>
-              <button
-                onClick={() => handleUpdateStatus(currentVerse.chapter, currentVerse.verse, "learned")}
-                className={`py-3 rounded-2xl border font-bold text-xs sm:text-sm transition-all duration-200 ${progress[`${currentVerse.chapter}:${currentVerse.verse}`] === "learned" ? "bg-emerald-600 border-emerald-500 text-white shadow-lg shadow-emerald-500/20" : "bg-zinc-850 hover:bg-zinc-800 border-zinc-750 text-emerald-500"}`}
-              >
-                🟢 암기 완료!
-              </button>
-            </div>
-
-            {/* Prev/Next Navigation Controls */}
-            <div className="flex items-center justify-between gap-4">
-              <button
-                disabled={currentVerseIndex === 0}
-                onClick={() => {
-                  setCurrentVerseIndex((prev) => prev - 1);
-                  setIsFlipped(false);
-                  stopTTS();
-                }}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-zinc-850 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold text-sm"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"></path></svg>
-                이전 구절
-              </button>
-
-              <div className="text-center text-sm font-semibold text-zinc-400">
-                {currentVerse.chapter}:{currentVerse.verse}
-              </div>
-
-              <button
-                disabled={currentVerseIndex === filteredVerses.length - 1}
-                onClick={() => {
-                  setCurrentVerseIndex((prev) => prev + 1);
-                  setIsFlipped(false);
-                  stopTTS();
-                }}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-zinc-850 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold text-sm"
-              >
-                다음 구절
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
-              </button>
-            </div>
-
-            {/* Note taking textarea */}
-            <div className={`mt-6 p-4 rounded-2xl border ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200"}`}>
-              <label className="block text-xs font-bold text-zinc-400 mb-2">💡 개인 메모 및 묵상</label>
-              <textarea
-                placeholder="이 구절에 관한 암기 요령이나 묵상 내용을 자유롭게 기록하세요..."
-                value={notes[`${currentVerse.chapter}:${currentVerse.verse}`] || ""}
-                onChange={(e) => handleSaveNote(currentVerse.chapter, currentVerse.verse, e.target.value)}
-                className={`w-full p-3 text-sm rounded-xl border outline-none min-h-[90px] ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-50 border-slate-200 text-slate-800"}`}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* --- TAB 3: BLANK PRACTICE --- */}
-        {activeTab === "blank" && currentVerse && (
-          <div className="max-w-2xl mx-auto">
-            
-            {/* Header info */}
-            <div className={`p-6 rounded-3xl border mb-6 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-bold text-emerald-400">
-                  요한계시록 {currentVerse.chapter}장 {currentVerse.verse}절
-                </h3>
-                
-                {/* Difficulty tabs */}
-                <div className="flex bg-zinc-800 p-0.5 rounded-lg border border-zinc-700 text-xs">
-                  {(["easy", "medium", "hard"] as const).map((diff) => (
-                    <button
-                      key={diff}
+                      key={ch.chapter}
                       onClick={() => {
-                        setBlankDifficulty(diff);
-                        setRevealedBlanks([]);
+                        setSelectedChapter(ch.chapter);
+                        setActiveTab("read");
                       }}
-                      className={`px-2.5 py-1 rounded-md font-medium transition-all ${blankDifficulty === diff ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+                      className={`p-3 rounded-2xl border text-left transition-all duration-200 hover:scale-[1.02] ${darkMode ? "bg-zinc-800/40 border-zinc-700/60 hover:bg-zinc-800" : "bg-slate-50 border-slate-200 hover:bg-slate-100"}`}
                     >
-                      {diff === "easy" ? "쉬움" : diff === "medium" ? "보통" : "어려움"}
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-sm">{ch.chapter}장</span>
+                        <span className="text-xs font-semibold text-emerald-400">{ch.percent}%</span>
+                      </div>
+                      <div className="w-full bg-zinc-700/40 h-1.5 rounded-full overflow-hidden mb-1">
+                        <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${ch.percent}%` }}></div>
+                      </div>
+                      <div className="text-[10px] text-zinc-400 flex justify-between">
+                        <span>암송 완료: {ch.learned} / {ch.total}</span>
+                      </div>
                     </button>
                   ))}
                 </div>
               </div>
-
-              {/* Dynamic text rendering with blanks */}
-              <div className="text-xl sm:text-2xl leading-loose font-medium text-center py-6 select-none flex flex-wrap gap-x-2 gap-y-3 justify-center">
-                {blankedWords.map((word, idx) => {
-                  const isRevealed = revealedBlanks.includes(idx);
-                  if (word.isMasked && !isRevealed) {
-                    return (
-                      <span
-                        key={idx}
-                        onClick={() => setRevealedBlanks([...revealedBlanks, idx])}
-                        className="px-3 bg-zinc-700/60 hover:bg-zinc-600 text-transparent border-b-2 border-emerald-500 rounded cursor-pointer transition-colors select-none"
-                        title="클릭하여 단어 보기"
-                      >
-                        {word.text.replace(/./g, "?")}
-                      </span>
-                    );
-                  }
-                  return (
-                    <span
-                      key={idx}
-                      onClick={() => {
-                        // Let them mask it back
-                        if (word.isMasked) {
-                          setRevealedBlanks(revealedBlanks.filter((item) => item !== idx));
-                        }
-                      }}
-                      className={`transition-all duration-200 ${word.isMasked ? "text-emerald-400 border-b-2 border-dashed border-emerald-400/50" : ""}`}
-                    >
-                      {word.text}
-                    </span>
-                  );
-                })}
-              </div>
-
-              <div className="text-center text-xs text-zinc-400 mt-2">
-                💡 회색 빈칸을 클릭하면 숨겨진 단어가 보입니다. 다시 클릭하면 숨길 수 있습니다.
-              </div>
             </div>
-
-            {/* Quick Actions */}
-            <div className="flex justify-between gap-4 mb-6">
-              <button
-                onClick={() => setRevealedBlanks([])}
-                className="px-4 py-2.5 rounded-xl border border-zinc-750 text-zinc-400 hover:text-zinc-200 text-xs sm:text-sm font-semibold"
-              >
-                🔄 전체 빈칸 다시 가리기
-              </button>
-
-              <button
-                onClick={() => setRevealedBlanks(Array.from({ length: blankedWords.length }, (_, i) => i))}
-                className="px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-750 text-zinc-200 text-xs sm:text-sm font-semibold"
-              >
-                👁️ 모든 정답 확인
-              </button>
-            </div>
-
-            {/* Navigation Bar */}
-            <div className="flex items-center justify-between gap-4">
-              <button
-                disabled={currentVerseIndex === 0}
-                onClick={() => {
-                  setCurrentVerseIndex((prev) => prev - 1);
-                  setRevealedBlanks([]);
-                }}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-zinc-850 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold text-sm"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"></path></svg>
-                이전 구절
-              </button>
-
-              <div className="text-center text-sm font-semibold text-zinc-400">
-                구절: {currentVerseIndex + 1} / {filteredVerses.length}
-              </div>
-
-              <button
-                disabled={currentVerseIndex === filteredVerses.length - 1}
-                onClick={() => {
-                  setCurrentVerseIndex((prev) => prev + 1);
-                  setRevealedBlanks([]);
-                }}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-zinc-850 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold text-sm"
-              >
-                다음 구절
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
-              </button>
-            </div>
-
           </div>
         )}
 
-        {/* --- TAB 4: TYPING TEST --- */}
-        {activeTab === "typing" && currentVerse && (
-          <div className="max-w-2xl mx-auto">
-            
-            <div className={`p-6 rounded-3xl border mb-6 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-              <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-                <h3 className="text-lg font-bold text-emerald-400">
-                  타이핑 연습 - {currentVerse.chapter}장 {currentVerse.verse}절
-                </h3>
+        {/* --- TAB 2: DAILY PLANNER (하루 5구절 플래너) --- */}
+        {activeTab === "planner" && activeDay === null && (
+          <div className="space-y-6">
+            <div className="flex justify-between items-center flex-wrap gap-2">
+              <div>
+                <h3 className="text-xl font-extrabold">81일 일일 암송 스케줄러</h3>
+                <p className="text-xs text-zinc-400">매일 5구절씩 마스터하여 81일 동안 요한계시록 전체를 공부하고 시험을 통과하세요!</p>
+              </div>
+              <div className="bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 px-4 py-2 rounded-xl text-sm font-semibold">
+                🏆 완주한 날짜: <span className="font-bold text-lg">{Object.keys(completedDays).length}</span> / 81일
+              </div>
+            </div>
+
+            {/* Days Grid list */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {Array.from({ length: 81 }, (_, i) => {
+                const dayNum = i + 1;
+                const verses = getVersesForDay(dayNum);
+                const isCompleted = completedDays[dayNum];
                 
-                {/* Mode toggle */}
-                <div className="flex bg-zinc-800 p-0.5 rounded-lg border border-zinc-700 text-xs">
-                  <button
-                    onClick={() => {
-                      setTypingMode("initial");
-                      setUserInput("");
-                    }}
-                    className={`px-3 py-1 rounded-md font-medium transition-all ${typingMode === "initial" ? "bg-emerald-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+                // Get display bounds
+                const startRef = verses.length > 0 ? `${verses[0].chapter}:${verses[0].verse}` : "";
+                const endRef = verses.length > 0 ? `${verses[verses.length - 1].chapter}:${verses[verses.length - 1].verse}` : "";
+
+                // Count how many are learned
+                let learnedCount = 0;
+                verses.forEach((v) => {
+                  if (progress[`${v.chapter}:${v.verse}`] === "learned") learnedCount++;
+                });
+                const percent = verses.length > 0 ? Math.round((learnedCount / verses.length) * 100) : 0;
+
+                return (
+                  <div
+                    key={dayNum}
+                    className={`p-4 rounded-2xl border flex flex-col justify-between transition-all duration-300 ${
+                      isCompleted
+                        ? "bg-emerald-950/15 border-emerald-500/40 text-emerald-100 shadow-sm shadow-emerald-500/5"
+                        : darkMode
+                        ? "bg-zinc-900 border-zinc-800 hover:border-zinc-700"
+                        : "bg-white border-slate-200 hover:border-slate-300 shadow-sm"
+                    }`}
                   >
-                    초성 매칭
-                  </button>
-                  <button
-                    onClick={() => {
-                      setTypingMode("full");
-                      setUserInput("");
-                    }}
-                    className={`px-3 py-1 rounded-md font-medium transition-all ${typingMode === "full" ? "bg-emerald-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
-                  >
-                    전체 텍스트
-                  </button>
-                </div>
-              </div>
-
-              {/* Initial display hint for consonant mode */}
-              {typingMode === "initial" && (
-                <div className="mb-4 p-3 rounded-xl bg-zinc-850/60 border border-zinc-800/80 text-center">
-                  <span className="text-xs text-zinc-400 block mb-1">초성 힌트</span>
-                  <span className="text-base font-bold tracking-widest text-emerald-300">
-                    {getInitials(currentVerse.text)}
-                  </span>
-                </div>
-              )}
-
-              {/* Input field */}
-              <div className="mb-4">
-                <textarea
-                  placeholder={
-                    typingMode === "initial"
-                      ? "화면에 표시된 초성에 맞춰 타이핑해 보세요..."
-                      : "요한계시록 구절 전체 텍스트를 정확하게 입력해 보세요..."
-                  }
-                  value={userInput}
-                  onChange={(e) => setUserInput(e.target.value)}
-                  className={`w-full p-4 text-base rounded-xl border outline-none min-h-[110px] transition-all duration-300 ${
-                    userInput === ""
-                      ? darkMode
-                        ? "bg-zinc-800 border-zinc-700"
-                        : "bg-slate-50 border-slate-200"
-                      : getTypingFeedback()?.isMatch
-                      ? getTypingFeedback()?.isComplete
-                        ? "bg-emerald-950/20 border-emerald-500 text-emerald-300"
-                        : "bg-zinc-800 border-emerald-600 text-zinc-200"
-                      : "bg-rose-950/20 border-rose-600 text-rose-300"
-                  }`}
-                />
-              </div>
-
-              {/* Match Feedback status */}
-              <div className="flex items-center justify-between text-xs sm:text-sm">
-                <div>
-                  {userInput !== "" && (
-                    <span className="font-semibold">
-                      {getTypingFeedback()?.isMatch ? (
-                        getTypingFeedback()?.isComplete ? (
-                          <span className="text-emerald-400">🎉 완벽하게 암송하셨습니다!</span>
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-extrabold text-sm text-zinc-400">{dayNum}일차</span>
+                        {isCompleted ? (
+                          <span className="text-xs font-bold text-amber-500 flex items-center gap-0.5">🏆 완료</span>
+                        ) : percent > 0 ? (
+                          <span className="text-[10px] text-amber-400 font-medium">진행 중 ({percent}%)</span>
                         ) : (
-                          <span className="text-emerald-400">✅ 올바르게 입력하고 있습니다...</span>
-                        )
-                      ) : (
-                        <span className="text-rose-500">❌ 오타가 있습니다. 텍스트를 확인하세요.</span>
-                      )}
-                    </span>
-                  )}
-                </div>
-                <div className="text-zinc-400">
-                  글자 수: {userInput.length} / {typingMode === "initial" ? getInitials(currentVerse.text).length : currentVerse.text.length}
-                </div>
-              </div>
+                          <span className="text-[10px] text-zinc-500 font-medium">미시작</span>
+                        )}
+                      </div>
+                      <h4 className="text-base font-extrabold mb-1">계시록 {startRef} ~ {endRef}</h4>
+                      <p className="text-[11px] text-zinc-400">총 {verses.length}구절</p>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-zinc-850/60 flex items-center justify-between gap-2">
+                      <div className="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+                        <div className="bg-emerald-500 h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }}></div>
+                      </div>
+                      <button
+                        onClick={() => handleStartDay(dayNum)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap ${
+                          isCompleted
+                            ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                            : "bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700"
+                        }`}
+                      >
+                        {isCompleted ? "다시 복습" : percent > 0 ? "이어서 학습" : "학습 & 시험"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* --- DEDICATED INDIVIDUAL DAY STUDY & TEST WORKSPACE --- */}
+        {activeTab === "planner" && activeDay !== null && (
+          <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">
+            {/* Navigation back and header */}
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+              <button
+                onClick={() => { setActiveDay(null); stopTTS(); }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-xs font-bold text-zinc-400 hover:text-zinc-200 transition-colors border border-zinc-800"
+              >
+                ⬅️ 전체 일정 목록으로 돌아가기
+              </button>
+              <h3 className="text-lg font-black text-amber-500">
+                {activeDay}일차 집중 훈련소
+              </h3>
             </div>
 
-            {/* Answer & Control panel */}
-            <div className="flex items-center justify-between gap-4 mb-6">
+            {/* Step Tabs (Study -> Test) */}
+            <div className="grid grid-cols-3 bg-zinc-900 p-1 rounded-2xl border border-zinc-800 text-sm font-semibold">
               <button
-                onClick={() => setShowTypingAnswer(!showTypingAnswer)}
-                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 text-xs sm:text-sm rounded-xl border border-zinc-700"
+                onClick={() => { setDayStudyStep("study"); stopTTS(); }}
+                className={`py-2 rounded-xl transition-all ${dayStudyStep === "study" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
               >
-                {showTypingAnswer ? "👁️ 정답 숨기기" : "👁️ 정답 구절 보기"}
+                1단계: 본문 공부하기 (Study)
               </button>
-
               <button
-                onClick={() => setUserInput("")}
-                className="px-4 py-2 bg-zinc-850 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs sm:text-sm rounded-xl"
+                onClick={handleGoToTest}
+                className={`py-2 rounded-xl transition-all ${dayStudyStep === "test" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
               >
-                다시 쓰기
+                2단계: 암송 시험보기 (Test)
+              </button>
+              <button
+                disabled={!completedDays[activeDay]}
+                onClick={() => { setDayStudyStep("complete"); stopTTS(); }}
+                className={`py-2 rounded-xl transition-all disabled:opacity-40 ${dayStudyStep === "complete" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+              >
+                3단계: 완료 증명 (Complete)
               </button>
             </div>
 
-            {showTypingAnswer && (
-              <div className={`p-4 mb-6 rounded-2xl border border-dashed transition-colors duration-300 ${darkMode ? "bg-emerald-950/10 border-emerald-800" : "bg-emerald-50 border-emerald-200"}`}>
-                <span className="text-xs font-bold text-emerald-400 block mb-1">정답 구절</span>
-                <p className="text-base font-semibold leading-relaxed break-keep">
-                  {currentVerse.text}
-                </p>
+            {/* --- STEP 1: STUDY SUB-PANEL --- */}
+            {dayStudyStep === "study" && (
+              <div className="space-y-6">
+                <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                  <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-800/80">
+                    <span className="text-sm text-zinc-400">📖 오늘의 5구절 본문을 정독하고 음성을 들으며 눈으로 익히세요.</span>
+                    <button
+                      onClick={() => {
+                        // Toggle showing all texts at once for testing memory
+                        const allHidden = revealStudyText.every(x => !x);
+                        setRevealStudyText(Array(5).fill(allHidden));
+                      }}
+                      className="text-xs bg-zinc-800 border border-zinc-700 px-3 py-1.5 rounded-xl text-zinc-300"
+                    >
+                      {revealStudyText.every(x => !x) ? "👁️ 전체 구절 표시" : "🙈 전체 구절 가리기"}
+                    </button>
+                  </div>
+
+                  <div className="space-y-6">
+                    {activeDayVerses.map((verse, idx) => {
+                      const key = `${verse.chapter}:${verse.verse}`;
+                      const isRevealed = revealStudyText[idx];
+                      const isTtsActive = activeTtsVerse === key;
+
+                      return (
+                        <div
+                          key={key}
+                          className={`p-4 rounded-2xl border transition-all duration-300 ${
+                            isTtsActive
+                              ? "bg-emerald-950/20 border-emerald-500"
+                              : darkMode
+                              ? "bg-zinc-850/40 border-transparent hover:bg-zinc-850"
+                              : "bg-slate-50 border-transparent hover:bg-slate-100/60"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-extrabold text-emerald-400">
+                              요한계시록 {verse.chapter}장 {verse.verse}절
+                            </span>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  const updated = [...revealStudyText];
+                                  updated[idx] = !updated[idx];
+                                  setRevealStudyText(updated);
+                                }}
+                                className="text-xs px-2 py-1 bg-zinc-800 rounded text-zinc-400 hover:text-zinc-200"
+                              >
+                                {isRevealed ? "가리기" : "보여주기"}
+                              </button>
+                              <button
+                                onClick={() => playTTS(verse.text, key)}
+                                className="text-xs px-2.5 py-1 bg-zinc-800 rounded hover:bg-zinc-750"
+                              >
+                                🔊 듣기
+                              </button>
+                            </div>
+                          </div>
+
+                          <p className={`text-lg leading-relaxed font-semibold transition-all duration-300 break-keep ${isRevealed ? "text-zinc-100 opacity-100" : "text-transparent bg-zinc-800 rounded select-none filter blur-sm"}`}>
+                            {verse.text}
+                          </p>
+
+                          {/* Personal notes */}
+                          <div className="mt-3">
+                            <input
+                              type="text"
+                              placeholder="💡 나만의 암기 요령, 단어 연상 팁 적기..."
+                              value={notes[key] || ""}
+                              onChange={(e) => handleSaveNote(verse.chapter, verse.verse, e.target.value)}
+                              className={`w-full px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-900 border-zinc-800 text-white" : "bg-white border-slate-200 text-slate-800"}`}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Actions bottom */}
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={handleGoToTest}
+                    className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-sm transition-all shadow-md shadow-emerald-500/10 flex items-center gap-1.5"
+                  >
+                    ✏️ 암송 시험 보러가기
+                  </button>
+                </div>
               </div>
             )}
 
-            {/* Navigation */}
-            <div className="flex items-center justify-between gap-4">
-              <button
-                disabled={currentVerseIndex === 0}
-                onClick={() => {
-                  setCurrentVerseIndex((prev) => prev - 1);
-                  setUserInput("");
-                  setShowTypingAnswer(false);
-                }}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-zinc-850 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold text-sm"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"></path></svg>
-                이전 구절
-              </button>
+            {/* --- STEP 2: TEST SUB-PANEL --- */}
+            {dayStudyStep === "test" && activeTestVerse && (
+              <div className="space-y-6">
+                <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                  
+                  <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-800/85">
+                    <span className="text-sm font-bold text-zinc-400">
+                      문제 {activeTestVerseIdx + 1} / {activeDayVerses.length}
+                    </span>
+                    <div className="flex bg-zinc-800 p-0.5 rounded-lg border border-zinc-700 text-xs">
+                      <button
+                        onClick={() => setDayTestMode("initial")}
+                        className={`px-3 py-1 rounded-md font-medium transition-all ${dayTestMode === "initial" ? "bg-emerald-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+                      >
+                        초성 매칭 시험
+                      </button>
+                      <button
+                        onClick={() => setDayTestMode("full")}
+                        className={`px-3 py-1 rounded-md font-medium transition-all ${dayTestMode === "full" ? "bg-emerald-600 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+                      >
+                        전체 입력 시험
+                      </button>
+                    </div>
+                  </div>
 
-              <button
-                disabled={currentVerseIndex === filteredVerses.length - 1}
-                onClick={() => {
-                  // If they finished correctly, auto mark as learned!
-                  const feed = getTypingFeedback();
-                  if (feed?.isComplete) {
-                    handleUpdateStatus(currentVerse.chapter, currentVerse.verse, "learned");
-                  }
-                  setCurrentVerseIndex((prev) => prev + 1);
-                  setUserInput("");
-                  setShowTypingAnswer(false);
-                }}
-                className="flex items-center gap-2 px-4 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold text-sm shadow-md"
-              >
-                다음 구절
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
-              </button>
-            </div>
+                  <div className="text-center mb-6">
+                    <h3 className="text-2xl font-black bg-gradient-to-r from-amber-400 to-amber-200 bg-clip-text text-transparent">
+                      요한계시록 {activeTestVerse.chapter}장 {activeTestVerse.verse}절
+                    </h3>
+                    <p className="text-xs text-zinc-400 mt-1">아래 빈칸에 알맞은 구절을 타이핑하세요.</p>
+                  </div>
 
+                  {/* Consonant hint */}
+                  {dayTestMode === "initial" && (
+                    <div className="mb-6 p-4 rounded-2xl bg-zinc-850/80 border border-zinc-800/90 text-center">
+                      <span className="text-[10px] text-zinc-500 block mb-1">초성 힌트</span>
+                      <p className="text-lg font-bold tracking-widest text-emerald-300 leading-relaxed break-all">
+                        {getInitials(activeTestVerse.text)}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Textarea for answer input */}
+                  <div className="space-y-4">
+                    <textarea
+                      autoFocus
+                      placeholder={dayTestMode === "initial" ? "초성을 보며 초성대로 혹은 한글로 타이핑해보세요..." : "성경 구절 전체를 정확히 입력해보세요..."}
+                      value={dayTestAnswers[activeTestVerseIdx]}
+                      onChange={(e) => {
+                        const updated = [...dayTestAnswers];
+                        updated[activeTestVerseIdx] = e.target.value;
+                        setDayTestAnswers(updated);
+                      }}
+                      className={`w-full p-4 text-base rounded-2xl border outline-none min-h-[120px] transition-all duration-300 ${
+                        dayTestAnswers[activeTestVerseIdx] === ""
+                          ? darkMode
+                            ? "bg-zinc-800 border-zinc-700"
+                            : "bg-slate-50 border-slate-200"
+                          : activeTestFeedback?.isMatch
+                          ? activeTestFeedback?.isComplete
+                            ? "bg-emerald-950/20 border-emerald-500 text-emerald-300"
+                            : "bg-zinc-800 border-emerald-600 text-zinc-200"
+                          : "bg-rose-950/20 border-rose-600 text-rose-300"
+                      }`}
+                    />
+
+                    <div className="flex justify-between items-center text-xs">
+                      <div>
+                        {dayTestAnswers[activeTestVerseIdx] !== "" && (
+                          <span className="font-bold">
+                            {activeTestFeedback?.isMatch ? (
+                              activeTestFeedback?.isComplete ? (
+                                <span className="text-emerald-400">🎉 정답입니다! 다음으로 넘어가세요.</span>
+                              ) : (
+                                <span className="text-emerald-400">✅ 맞게 쓰고 계십니다...</span>
+                              )
+                            ) : (
+                              <span className="text-rose-500">❌ 오타가 있습니다. 본문을 다시 떠올려보세요.</span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-zinc-500">
+                        글자 수: {dayTestAnswers[activeTestVerseIdx].length} / {dayTestMode === "initial" ? getInitials(activeTestVerse.text).length : activeTestVerse.text.length}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Peek Answer button */}
+                  <div className="mt-4 pt-4 border-t border-zinc-800/40 flex justify-between gap-3">
+                    <button
+                      onClick={() => {
+                        // Play audio as a hint
+                        playTTS(activeTestVerse.text, `${activeTestVerse.chapter}:${activeTestVerse.verse}`);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-xs text-zinc-400"
+                    >
+                      🔊 힌트 음성 듣기
+                    </button>
+                    
+                    <button
+                      onClick={() => {
+                        const updated = [...dayTestAnswers];
+                        updated[activeTestVerseIdx] = dayTestMode === "initial" ? getInitials(activeTestVerse.text) : activeTestVerse.text;
+                        setDayTestAnswers(updated);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-750 text-xs text-zinc-400"
+                    >
+                      👁️ 바로 정답 채우기
+                    </button>
+                  </div>
+
+                </div>
+
+                {/* Navigation inside tests */}
+                <div className="flex justify-between gap-4">
+                  <button
+                    disabled={activeTestVerseIdx === 0}
+                    onClick={() => {
+                      setActiveTestVerseIdx((prev) => prev - 1);
+                      stopTTS();
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-xs font-bold text-zinc-400 disabled:opacity-40"
+                  >
+                    이전 문제
+                  </button>
+
+                  <button
+                    disabled={!activeTestFeedback?.isComplete}
+                    onClick={() => {
+                      if (activeTestVerseIdx === activeDayVerses.length - 1) {
+                        // Finished all 5 questions!
+                        handleCompleteDay(activeDay);
+                        setDayStudyStep("complete");
+                        stopTTS();
+                      } else {
+                        setActiveTestVerseIdx((prev) => prev + 1);
+                        stopTTS();
+                      }
+                    }}
+                    className={`flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs font-bold shadow-md transition-all ${
+                      activeTestFeedback?.isComplete
+                        ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                        : "bg-zinc-900 text-zinc-600 cursor-not-allowed border border-zinc-800"
+                    }`}
+                  >
+                    {activeTestVerseIdx === activeDayVerses.length - 1 ? "종료 및 도장 받기 🏆" : "다음 문제로"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* --- STEP 3: COMPLETE SUB-PANEL --- */}
+            {dayStudyStep === "complete" && (
+              <div className={`p-8 rounded-3xl border text-center space-y-6 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                <div className="py-6">
+                  <div className="text-6xl mb-4 animate-bounce">🏆</div>
+                  <h3 className="text-2xl font-black text-emerald-400">{activeDay}일차 학습 통과!</h3>
+                  <p className="text-zinc-400 text-sm max-w-md mx-auto mt-2">
+                    오늘 목표인 5구절 암송 시험을 모두 정답으로 통과하였습니다. 이 기세로 81일 완주까지 전진하세요!
+                  </p>
+                </div>
+
+                <div className="p-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/10 text-xs max-w-sm mx-auto text-emerald-300 font-medium">
+                  ✔️ 암기 상태 업데이트: 오늘 통과한 5구절의 암기 마크가 대시보드에서 자동으로 &apos;암기 완료&apos;로 변경되었습니다.
+                </div>
+
+                <div className="flex justify-center gap-3">
+                  <button
+                    onClick={() => { setActiveDay(null); stopTTS(); }}
+                    className="px-6 py-3 rounded-2xl bg-zinc-800 hover:bg-zinc-750 text-zinc-200 text-sm font-bold"
+                  >
+                    목록으로 가기
+                  </button>
+                  {activeDay < 81 && (
+                    <button
+                      onClick={() => handleStartDay(activeDay + 1)}
+                      className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold shadow-md shadow-emerald-500/20"
+                    >
+                      ⏩ 다음 {activeDay + 1}일차 공부 시작
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* --- TAB 5: BIBLE READER --- */}
+        {/* --- TAB 3: BIBLE READER (성경 학습 1~22장) --- */}
         {activeTab === "read" && (
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-4xl mx-auto space-y-6">
             
-            {/* TTS Toolbar */}
-            <div className={`p-4 mb-6 rounded-2xl border flex flex-wrap items-center justify-between gap-4 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+            {/* Audio controllers toolbar */}
+            <div className={`p-4 rounded-2xl border flex flex-wrap items-center justify-between gap-4 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
               <div className="flex items-center gap-3">
                 <span className="text-xs font-bold text-zinc-400">오디오 낭독 (TTS)</span>
                 {isPlayingTTS ? (
@@ -1100,7 +1072,7 @@ export default function RevelationMemorizer() {
                   <button
                     onClick={() => {
                       if (filteredVerses.length > 0) {
-                        const first = filteredVerses[currentVerseIndex] || filteredVerses[0];
+                        const first = filteredVerses[0];
                         playTTS(first.text, `${first.chapter}:${first.verse}`);
                       }
                     }}
@@ -1123,7 +1095,7 @@ export default function RevelationMemorizer() {
                 </label>
 
                 <div className="flex items-center gap-2">
-                  <span>속도:</span>
+                  <span>배속:</span>
                   <select
                     value={ttsSpeed}
                     onChange={(e) => setTtsSpeed(parseFloat(e.target.value))}
@@ -1138,19 +1110,19 @@ export default function RevelationMemorizer() {
               </div>
             </div>
 
-            {/* Distraction-Free Reader Content */}
-            <div className={`p-8 rounded-3xl border min-h-[400px] transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-              <div className="max-w-2xl mx-auto space-y-8">
+            {/* Main Reader panel */}
+            <div className={`p-8 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+              <div className="max-w-2xl mx-auto space-y-6">
                 
                 <div className="text-center mb-8 border-b border-zinc-800/80 pb-6">
-                  <h2 className="text-3xl font-extrabold">
+                  <h2 className="text-3xl font-extrabold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
                     {selectedChapter === 0 ? "요한계시록 전체 구절" : `요한계시록 ${selectedChapter}장`}
                   </h2>
-                  <p className="text-xs text-zinc-400 mt-2">구절 앞 기호를 클릭해 암기 상태를 쉽게 변경하거나 오디오로 들을 수 있습니다.</p>
+                  <p className="text-xs text-zinc-400 mt-2">왼쪽 번호 및 기호(🟢🟡🔴)를 눌러서 개별 구절 상태를 변경하거나 스피커를 눌러 구절을 낭독시킬 수 있습니다.</p>
                 </div>
 
                 <div className="space-y-6">
-                  {filteredVerses.map((v, idx) => {
+                  {filteredVerses.map((v) => {
                     const key = `${v.chapter}:${v.verse}`;
                     const status = progress[key] || "unlearned";
                     const hasNote = !!notes[key];
@@ -1159,21 +1131,19 @@ export default function RevelationMemorizer() {
                     return (
                       <div
                         key={key}
-                        className={`group p-4 rounded-2xl transition-all duration-300 border flex flex-col md:flex-row md:items-start gap-4 ${
+                        className={`group p-4 rounded-2xl border transition-all duration-300 flex flex-col md:flex-row md:items-start gap-4 ${
                           isTtsActive
-                            ? "bg-emerald-950/20 border-emerald-500 shadow-md scale-[1.01]"
+                            ? "bg-emerald-950/20 border-emerald-500 scale-[1.01]"
                             : darkMode
                             ? "bg-zinc-850/30 border-transparent hover:bg-zinc-850 hover:border-zinc-800"
-                            : "bg-slate-50/50 border-transparent hover:bg-slate-100/70 hover:border-slate-200"
+                            : "bg-slate-50 border-transparent hover:bg-slate-100 hover:border-slate-200"
                         }`}
                       >
-                        {/* verse controllers */}
+                        {/* Controllers side */}
                         <div className="flex items-center md:flex-col gap-2 min-w-[70px]">
                           <span className="text-sm font-extrabold text-emerald-400">
                             {v.chapter}:{v.verse}
                           </span>
-                          
-                          {/* status button toggle */}
                           <button
                             onClick={() => {
                               const nextStatusMap: { [key in ProgressStatus]: ProgressStatus } = {
@@ -1184,28 +1154,24 @@ export default function RevelationMemorizer() {
                               handleUpdateStatus(v.chapter, v.verse, nextStatusMap[status]);
                             }}
                             className="p-1 rounded text-xs"
-                            title="클릭하여 상태 전환"
+                            title="상태 전환"
                           >
                             {status === "learned" ? "🟢" : status === "reviewing" ? "🟡" : "🔴"}
                           </button>
-
-                          {/* audio play button */}
                           <button
                             onClick={() => playTTS(v.text, key)}
-                            className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded hover:bg-zinc-700 transition-opacity"
-                            title="이 구절 낭독"
+                            className="p-1 rounded hover:bg-zinc-700/50 transition-opacity text-xs"
+                            title="구절 읽기"
                           >
                             🔊
                           </button>
                         </div>
 
-                        {/* verse text */}
+                        {/* Text Content side */}
                         <div className="flex-1">
                           <p className="text-lg leading-relaxed break-keep font-medium select-text">
                             {v.text}
                           </p>
-                          
-                          {/* Note indicators */}
                           {hasNote && (
                             <div className="mt-2 text-xs text-amber-400/90 italic bg-amber-500/5 p-2 rounded-lg border border-amber-500/10">
                               📝 {notes[key]}
@@ -1223,12 +1189,299 @@ export default function RevelationMemorizer() {
           </div>
         )}
 
+        {/* --- TAB 4: PRACTICE (개별 훈련소) --- */}
+        {activeTab === "practice" && currentPracticeVerse && (
+          <div className="max-w-2xl mx-auto space-y-6">
+            
+            {/* Sub-tab selection */}
+            <div className="grid grid-cols-3 bg-zinc-900 p-1 rounded-2xl border border-zinc-800 text-sm font-semibold">
+              <button
+                onClick={() => setPracticeSubTab("card")}
+                className={`py-2 rounded-xl transition-all ${practiceSubTab === "card" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+              >
+                플래시카드 훈련
+              </button>
+              <button
+                onClick={() => setPracticeSubTab("blank")}
+                className={`py-2 rounded-xl transition-all ${practiceSubTab === "blank" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+              >
+                빈칸 채우기 훈련
+              </button>
+              <button
+                onClick={() => setPracticeSubTab("typing")}
+                className={`py-2 rounded-xl transition-all ${practiceSubTab === "typing" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+              >
+                타이핑 테스트 훈련
+              </button>
+            </div>
+
+            {/* --- SUB-TAB A: FLASHCARD --- */}
+            {practiceSubTab === "card" && (
+              <div className="space-y-6">
+                <div className="perspective-1000 w-full min-h-[260px] cursor-pointer" onClick={() => setIsPracticeCardFlipped(!isPracticeCardFlipped)}>
+                  <div className={`relative w-full h-full min-h-[260px] duration-500 preserve-3d ${isPracticeCardFlipped ? "rotate-y-180" : ""}`}>
+                    
+                    {/* Front */}
+                    <div className={`absolute inset-0 w-full h-full p-8 rounded-3xl border flex flex-col justify-between backface-hidden transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800 hover:border-zinc-750" : "bg-white border-slate-200 hover:border-slate-300 shadow-lg"}`}>
+                      <div className="flex justify-between items-center">
+                        <span className="px-3 py-1 text-xs rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">요한계시록</span>
+                        <span className="text-xs text-zinc-400">클릭하여 뒤집기</span>
+                      </div>
+                      <div className="text-center my-auto py-6">
+                        <h2 className="text-4xl font-extrabold tracking-tight">{currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절</h2>
+                      </div>
+                      <div className="flex justify-between items-center text-xs text-zinc-400">
+                        <span>번호: {currentPracticeIndex + 1} / {filteredVerses.length}</span>
+                        <span>
+                          상태: {progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "learned" ? "🟢 암기완료" : progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "reviewing" ? "🟡 복습중" : "🔴 미학습"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Back */}
+                    <div className={`absolute inset-0 w-full h-full p-8 rounded-3xl border flex flex-col justify-between rotate-y-180 backface-hidden transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-lg"}`}>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm font-bold text-emerald-400">{currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            playTTS(currentPracticeVerse.text, `${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`);
+                          }}
+                          className="p-1 rounded bg-zinc-800 text-xs text-zinc-400 hover:text-zinc-200"
+                        >
+                          🔊 듣기
+                        </button>
+                      </div>
+                      <div className="my-auto py-2">
+                        <p className="text-lg sm:text-xl leading-relaxed font-semibold text-center break-keep tracking-wide">{currentPracticeVerse.text}</p>
+                      </div>
+                      <div className="text-right text-xs text-zinc-500">클릭하여 다시 가리기</div>
+                    </div>
+
+                  </div>
+                </div>
+
+                {/* Tag status */}
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "unlearned")}
+                    className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "unlearned" || !progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "bg-rose-600 border-rose-500 text-white" : "bg-zinc-900 text-rose-500"}`}
+                  >
+                    🔴 미학습
+                  </button>
+                  <button
+                    onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "reviewing")}
+                    className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "reviewing" ? "bg-amber-600 border-amber-500 text-white" : "bg-zinc-900 text-amber-500"}`}
+                  >
+                    🟡 복습 중
+                  </button>
+                  <button
+                    onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "learned")}
+                    className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "learned" ? "bg-emerald-600 border-emerald-500 text-white" : "bg-zinc-900 text-emerald-500"}`}
+                  >
+                    🟢 암기 완료
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* --- SUB-TAB B: BLANKS --- */}
+            {practiceSubTab === "blank" && (
+              <div className="space-y-6">
+                <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                  <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+                    <h3 className="text-base font-bold text-emerald-400">{currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절</h3>
+                    <div className="flex bg-zinc-850 p-0.5 rounded-lg border border-zinc-700 text-xs">
+                      {(["easy", "medium", "hard"] as const).map((diff) => (
+                        <button
+                          key={diff}
+                          onClick={() => { setBlankDifficulty(diff); setRevealedBlanks([]); }}
+                          className={`px-2.5 py-1 rounded-md font-medium transition-all ${blankDifficulty === diff ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+                        >
+                          {diff === "easy" ? "쉬움" : diff === "medium" ? "보통" : "어려움"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="text-lg sm:text-xl leading-loose font-semibold text-center py-6 select-none flex flex-wrap gap-x-2 gap-y-3 justify-center">
+                    {blankedPracticeWords.map((word, idx) => {
+                      const isRevealed = revealedBlanks.includes(idx);
+                      if (word.isMasked && !isRevealed) {
+                        return (
+                          <span
+                            key={idx}
+                            onClick={() => setRevealedBlanks([...revealedBlanks, idx])}
+                            className="px-3 bg-zinc-800 hover:bg-zinc-700 text-transparent border-b-2 border-emerald-500 rounded cursor-pointer transition-colors"
+                          >
+                            {word.text.replace(/./g, "?")}
+                          </span>
+                        );
+                      }
+                      return (
+                        <span
+                          key={idx}
+                          onClick={() => { if (word.isMasked) setRevealedBlanks(revealedBlanks.filter(i => i !== idx)); }}
+                          className={`transition-all ${word.isMasked ? "text-emerald-400 border-b-2 border-dashed border-emerald-400/50" : ""}`}
+                        >
+                          {word.text}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex justify-between gap-3">
+                  <button onClick={() => setRevealedBlanks([])} className="px-3 py-1.5 border border-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs rounded-xl">
+                    🔄 다시 가리기
+                  </button>
+                  <button onClick={() => setRevealedBlanks(Array.from({ length: blankedPracticeWords.length }, (_, i) => i))} className="px-3 py-1.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 text-xs rounded-xl">
+                    👁️ 전체 정답 보기
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* --- SUB-TAB C: TYPING TEST --- */}
+            {practiceSubTab === "typing" && (
+              <div className="space-y-6">
+                <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                  <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+                    <h3 className="text-base font-bold text-emerald-400">{currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절</h3>
+                    <div className="flex bg-zinc-805 p-0.5 rounded-lg border border-zinc-700 text-[10px]">
+                      <button onClick={() => { setTypingMode("initial"); setPracticeUserInput(""); }} className={`px-2.5 py-1 rounded transition-all ${typingMode === "initial" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}>
+                        초성 모드
+                      </button>
+                      <button onClick={() => { setTypingMode("full"); setPracticeUserInput(""); }} className={`px-2.5 py-1 rounded transition-all ${typingMode === "full" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}>
+                        전체 모드
+                      </button>
+                    </div>
+                  </div>
+
+                  {typingMode === "initial" && (
+                    <div className="mb-4 p-3 rounded-xl bg-zinc-850/60 border border-zinc-800/80 text-center">
+                      <span className="text-[10px] text-zinc-500 block mb-0.5">초성 힌트</span>
+                      <p className="text-sm font-bold tracking-widest text-emerald-300 leading-relaxed">
+                        {getInitials(currentPracticeVerse.text)}
+                      </p>
+                    </div>
+                  )}
+
+                  <textarea
+                    placeholder="암송하며 한글 혹은 초성으로 입력해 보세요..."
+                    value={practiceUserInput}
+                    onChange={(e) => setPracticeUserInput(e.target.value)}
+                    className={`w-full p-4 text-base rounded-2xl border outline-none min-h-[110px] transition-all duration-350 ${
+                      practiceUserInput === ""
+                        ? darkMode
+                          ? "bg-zinc-800 border-zinc-700"
+                          : "bg-slate-50 border-slate-200"
+                        : getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isMatch
+                        ? getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isComplete
+                          ? "bg-emerald-950/20 border-emerald-500 text-emerald-300"
+                          : "bg-zinc-800 border-emerald-600 text-zinc-200"
+                        : "bg-rose-950/20 border-rose-600 text-rose-300"
+                    }`}
+                  />
+
+                  <div className="flex justify-between items-center text-xs mt-2">
+                    <div>
+                      {practiceUserInput !== "" && (
+                        <span className="font-bold">
+                          {getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isMatch ? (
+                            getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isComplete ? (
+                              <span className="text-emerald-400">🎉 정답 통과!</span>
+                            ) : (
+                              <span className="text-emerald-400">✅ 올바른 입력 중...</span>
+                            )
+                          ) : (
+                            <span className="text-rose-500">❌ 오타가 있습니다.</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-zinc-500">
+                      글자 수: {practiceUserInput.length} / {typingMode === "initial" ? getInitials(currentPracticeVerse.text).length : currentPracticeVerse.text.length}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-between gap-3">
+                  <button onClick={() => setShowPracticeAnswer(!showPracticeAnswer)} className="px-3 py-1.5 bg-zinc-850 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 text-xs rounded-xl">
+                    {showPracticeAnswer ? "👁️ 정답 숨기기" : "👁️ 정답 보기"}
+                  </button>
+                  <button onClick={() => setPracticeUserInput("")} className="px-3 py-1.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-400 text-xs rounded-xl">
+                    지우기
+                  </button>
+                </div>
+
+                {showPracticeAnswer && (
+                  <div className="p-4 rounded-xl border border-dashed border-emerald-800 bg-emerald-950/5">
+                    <p className="text-sm font-semibold leading-relaxed">{currentPracticeVerse.text}</p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Navigation inside practices */}
+            <div className="flex items-center justify-between gap-4 pt-4">
+              <button
+                disabled={currentPracticeIndex === 0}
+                onClick={() => {
+                  setCurrentPracticeIndex((prev) => prev - 1);
+                  setIsPracticeCardFlipped(false);
+                  setPracticeUserInput("");
+                  setShowPracticeAnswer(false);
+                  setRevealedBlanks([]);
+                  stopTTS();
+                }}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-xs font-bold text-zinc-400 disabled:opacity-40"
+              >
+                이전 구절
+              </button>
+
+              <button
+                disabled={currentPracticeIndex === filteredVerses.length - 1}
+                onClick={() => {
+                  // If they finished correctly in typing practice, automatically mark as learned
+                  const feed = getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode);
+                  if (practiceSubTab === "typing" && feed?.isComplete) {
+                    handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "learned");
+                  }
+                  
+                  setCurrentPracticeIndex((prev) => prev + 1);
+                  setIsPracticeCardFlipped(false);
+                  setPracticeUserInput("");
+                  setShowPracticeAnswer(false);
+                  setRevealedBlanks([]);
+                  stopTTS();
+                }}
+                className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-md disabled:opacity-40"
+              >
+                다음 구절
+              </button>
+            </div>
+
+            {/* Personal Notes section */}
+            <div className={`p-4 rounded-2xl border ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200"}`}>
+              <label className="block text-xs font-bold text-zinc-400 mb-2">📝 개인 묵상 및 메모 기록</label>
+              <textarea
+                placeholder="해당 구절에 메모나 연상 단어를 적어 기억을 돕도록 하세요..."
+                value={notes[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] || ""}
+                onChange={(e) => handleSaveNote(currentPracticeVerse.chapter, currentPracticeVerse.verse, e.target.value)}
+                className={`w-full p-3 text-xs rounded-xl border outline-none min-h-[80px] ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-50 border-slate-200 text-slate-800"}`}
+              />
+            </div>
+
+          </div>
+        )}
+
       </main>
 
       {/* --- FOOTER --- */}
       <footer className={`mt-12 py-8 border-t text-center text-xs text-zinc-500 transition-colors duration-300 ${darkMode ? "bg-zinc-950 border-zinc-900" : "bg-slate-100 border-slate-200"}`}>
         <p className="mb-2">요한계시록 암기 플래너 | 1장 1절 ~ 22장 21절 (404구절)</p>
-        <p>© 2026 Revelation Memorizer. 말씀과 동행하는 삶을 응원합니다.</p>
+        <p>© 2026 Revelation Planner. 공부하고 채점하는 암송 학습지.</p>
       </footer>
     </div>
   );
