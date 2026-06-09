@@ -14,9 +14,9 @@ export async function POST(request: Request) {
 
     const cleanUsername = username.trim().toLowerCase();
     
-    if (cleanUsername.length < 3) {
+    if (cleanUsername.length < 2) {
       return NextResponse.json(
-        { error: "아이디는 3글자 이상이어야 합니다." },
+        { error: "아이디는 2글자 이상이어야 합니다." },
         { status: 400 }
       );
     }
