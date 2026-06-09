@@ -773,6 +773,90 @@ export default function RevelationMemorizer() {
     localStorage.setItem("rev_history", JSON.stringify(mergedHistory));
   };
 
+  if (!isLoggedIn) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center transition-colors duration-300 font-sans p-4 relative ${darkMode ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-slate-900"}`}>
+        {/* Sleek Theme Switcher in Corner of Login page */}
+        <div className="absolute top-4 right-4">
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className={`p-2 rounded-lg transition-colors border ${darkMode ? "bg-zinc-900 border-zinc-850 hover:bg-zinc-800 text-yellow-400" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"}`}
+            title="테마 변경"
+          >
+            {darkMode ? (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m2.828 0l-.707-.707m12.828-12.828l-.707-.707M8.364 8.364l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z"></path></svg>
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+            )}
+          </button>
+        </div>
+
+        <div className={`w-full max-w-md p-8 rounded-3xl border shadow-2xl transition-all duration-300 ${darkMode ? "bg-zinc-900/50 backdrop-blur-lg border-zinc-800" : "bg-white border-slate-200"}`}>
+          <div className="text-center mb-8">
+            <div className="inline-flex p-3.5 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 text-white shadow-lg shadow-emerald-500/25 mb-4">
+              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+              </svg>
+            </div>
+            <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">요한계시록 암기 플래너</h1>
+            <p className="text-xs text-zinc-400 mt-1.5">성경 공부 및 암송 시험 점검을 위한 계정 기반 연동 플래너</p>
+          </div>
+
+          <form onSubmit={isRegisterMode ? handleRegister : handleLogin} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-zinc-400">아이디</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="아이디를 입력하세요"
+                  value={loginId}
+                  onChange={(e) => setLoginId(e.target.value)}
+                  disabled={syncLoading}
+                  className={`w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                />
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">👤</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-zinc-400">비밀번호</label>
+              <div className="relative">
+                <input
+                  type="password"
+                  placeholder="비밀번호를 입력하세요"
+                  value={loginPw}
+                  onChange={(e) => setLoginPw(e.target.value)}
+                  disabled={syncLoading}
+                  className={`w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                />
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">🔑</span>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={syncLoading}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-extrabold rounded-xl transition-all shadow-lg shadow-emerald-500/15"
+            >
+              {syncLoading ? "처리 중..." : isRegisterMode ? "회원가입하기" : "로그인하기"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setIsRegisterMode(!isRegisterMode);
+                setLoginPw("");
+              }}
+              className="w-full text-center text-xs text-zinc-400 hover:text-zinc-200 underline mt-2 block"
+            >
+              {isRegisterMode ? "이미 계정이 있으신가요? 로그인하기" : "처음이신가요? 3초 회원가입하기"}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`min-h-screen transition-colors duration-300 font-sans ${darkMode ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-slate-900"}`}>
       {/* --- HEADER --- */}
