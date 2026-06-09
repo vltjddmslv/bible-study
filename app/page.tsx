@@ -69,6 +69,7 @@ export default function RevelationMemorizer() {
   const [sessionToken, setSessionToken] = useState<string>("");
   const [loginId, setLoginId] = useState<string>("");
   const [loginPw, setLoginPw] = useState<string>("");
+  const [loginPwConfirm, setLoginPwConfirm] = useState<string>("");
   const [isRegisterMode, setIsRegisterMode] = useState<boolean>(false);
   const [syncLoading, setSyncLoading] = useState<boolean>(false);
   const [lastSyncTime, setLastSyncTime] = useState<string>("");
@@ -547,12 +548,15 @@ export default function RevelationMemorizer() {
     fileReader.readAsText(file);
   };
 
-  // --- Cloud Sync Handlers (PC ↔ Mobile Sync via kvdb.io) ---
   // --- Cloud Sync Handlers (PC ↔ Mobile Sync via Login) ---
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loginId.trim() || !loginPw.trim()) {
-      alert("아이디와 비밀번호를 모두 입력해주세요.");
+    if (!loginId.trim() || !loginPw.trim() || !loginPwConfirm.trim()) {
+      alert("아이디와 비밀번호, 비밀번호 확인을 모두 입력해주세요.");
+      return;
+    }
+    if (loginPw !== loginPwConfirm) {
+      alert("❌ 입력하신 두 비밀번호가 일치하지 않습니다. 다시 확인해주세요.");
       return;
     }
     setSyncLoading(true);
@@ -566,9 +570,10 @@ export default function RevelationMemorizer() {
       if (!response.ok) {
         throw new Error(data.error || "회원가입 실패");
       }
-      alert("🎉 회원가입 성공! 로그인해 주세요.");
+      alert("🎉 회원가입 성공! 이제 로그인해주세요.");
       setIsRegisterMode(false);
       setLoginPw("");
+      setLoginPwConfirm("");
     } catch (e: any) {
       alert(`❌ 회원가입 오류: ${e.message}`);
     } finally {
@@ -602,6 +607,7 @@ export default function RevelationMemorizer() {
 
       setLoginId("");
       setLoginPw("");
+      setLoginPwConfirm("");
 
       alert(`👋 ${data.username}님, 반갑습니다! 로그인 성공 및 클라우드 동기화가 활성화되었습니다.`);
     } catch (e: any) {
@@ -617,6 +623,7 @@ export default function RevelationMemorizer() {
       setLoggedInUser("");
       setSessionToken("");
       setLastSyncTime("");
+      setLoginPwConfirm("");
       localStorage.removeItem("rev_username");
       localStorage.removeItem("rev_token");
       localStorage.removeItem("rev_last_sync_time");
@@ -833,6 +840,23 @@ export default function RevelationMemorizer() {
               </div>
             </div>
 
+            {isRegisterMode && (
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-zinc-400">비밀번호 확인</label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    placeholder="비밀번호를 다시 한번 입력하세요"
+                    value={loginPwConfirm}
+                    onChange={(e) => setLoginPwConfirm(e.target.value)}
+                    disabled={syncLoading}
+                    className={`w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                  />
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">🔒</span>
+                </div>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={syncLoading}
@@ -846,6 +870,7 @@ export default function RevelationMemorizer() {
               onClick={() => {
                 setIsRegisterMode(!isRegisterMode);
                 setLoginPw("");
+                setLoginPwConfirm("");
               }}
               className="w-full text-center text-xs text-zinc-400 hover:text-zinc-200 underline mt-2 block"
             >
@@ -1120,54 +1145,7 @@ export default function RevelationMemorizer() {
                     나만의 아이디와 비밀번호로 로그인하여 여러 기기에서 학습 진도를 실시간으로 동기화합니다. 학습을 진행하면 **배경에서 자동으로 저장**되어 간편합니다.
                   </p>
 
-                  {!isLoggedIn ? (
-                    // Login / Register Form
-                    <form onSubmit={isRegisterMode ? handleRegister : handleLogin} className="space-y-3 pt-2">
-                      <div className="space-y-1">
-                        <label className="block text-[11px] text-zinc-400">아이디</label>
-                        <input
-                          type="text"
-                          placeholder="사용할 아이디를 입력하세요"
-                          value={loginId}
-                          onChange={(e) => setLoginId(e.target.value)}
-                          disabled={syncLoading}
-                          className={`w-full px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-50 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="block text-[11px] text-zinc-400">비밀번호</label>
-                        <input
-                          type="password"
-                          placeholder="비밀번호를 입력하세요"
-                          value={loginPw}
-                          onChange={(e) => setLoginPw(e.target.value)}
-                          disabled={syncLoading}
-                          className={`w-full px-3 py-1.5 text-xs rounded-xl border outline-none ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-50 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
-                        />
-                      </div>
-
-                      <div className="flex flex-col gap-2 pt-1">
-                        <button
-                          type="submit"
-                          disabled={syncLoading}
-                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition-colors"
-                        >
-                          {syncLoading ? "처리 중..." : isRegisterMode ? "회원가입하기" : "로그인하기"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsRegisterMode(!isRegisterMode);
-                            setLoginPw("");
-                          }}
-                          className="text-[11px] text-zinc-400 hover:text-zinc-200 text-center underline"
-                        >
-                          {isRegisterMode ? "이미 계정이 있으신가요? 로그인으로 이동" : "계정이 없으신가요? 회원가입으로 이동"}
-                        </button>
-                      </div>
-                    </form>
-                  ) : (
+                  {isLoggedIn && (
                     // Logged In Status & Manual Sync Actions
                     <div className="space-y-3 pt-2">
                       <div className="p-3.5 rounded-2xl bg-zinc-800/40 border border-zinc-800/60 text-xs space-y-2">
