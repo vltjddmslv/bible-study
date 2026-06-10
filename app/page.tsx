@@ -22,11 +22,99 @@ interface StudyRecord {
   count: number; // verses studied/marked
 }
 
+interface StudyPlan {
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  excludeWeekends: boolean;
+  excludeHolidays: boolean;
+  totalDays: number;
+  schedule: {
+    day: number;
+    date: string; // YYYY-MM-DD
+    verseIndices: number[]; // indices in REVELATION_VERSES
+  }[];
+}
+
+// Helper to identify weekends and Korean national holidays
+const isRestDay = (dateStr: string, excludeWeekends: boolean, excludeHolidays: boolean): boolean => {
+  const date = new Date(dateStr);
+  const dayOfWeek = date.getDay(); // 0: Sun, 6: Sat
+
+  if (excludeWeekends && (dayOfWeek === 0 || dayOfWeek === 6)) {
+    return true;
+  }
+
+  if (excludeHolidays) {
+    const mmDd = dateStr.substring(5, 10); // "MM-DD"
+    const solarHolidays = [
+      "01-01", // 신정
+      "03-01", // 삼일절
+      "05-05", // 어린이날
+      "06-06", // 현충일
+      "08-15", // 광복절
+      "10-03", // 개천절
+      "10-09", // 한글날
+      "12-25"  // 성탄절
+    ];
+
+    if (solarHolidays.includes(mmDd)) {
+      return true;
+    }
+
+    const lunarHolidays = [
+      // 2026
+      "2026-02-16", "2026-02-17", "2026-02-18", // 설날 연휴
+      "2026-05-24", // 부처님오신날
+      "2026-09-24", "2026-09-25", "2026-09-26", // 추석 연휴
+      // 2027
+      "2027-02-06", "2027-02-07", "2027-02-08", // 설날 연휴
+      "2027-05-13", // 부처님오신날
+      "2027-09-14", "2027-09-15", "2027-09-16"  // 추석 연휴
+    ];
+
+    if (lunarHolidays.includes(dateStr)) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+// Helper to get Korean day of week
+const getDayOfWeek = (dateStr: string): string => {
+  const week = ["일", "월", "화", "수", "목", "금", "토"];
+  return week[new Date(dateStr).getDay()];
+};
+
 export default function RevelationMemorizer() {
   // --- State Variables ---
   const [progress, setProgress] = useState<VerseProgress>({});
   const [notes, setNotes] = useState<VerseNotes>({});
   const [studyHistory, setStudyHistory] = useState<StudyRecord[]>([]);
+  const [studyPlan, setStudyPlan] = useState<StudyPlan | null>(null);
+  const [setupStartDate, setSetupStartDate] = useState<string>("");
+  const [setupEndDate, setSetupEndDate] = useState<string>("");
+  const [setupExcWk, setSetupExcWk] = useState<boolean>(true);
+  const [setupExcHol, setSetupExcHol] = useState<boolean>(true);
+
+  // Live calculation of net study days and avg verses count
+  const setupPreviewStats = useMemo(() => {
+    if (!setupStartDate || !setupEndDate) return { netDays: 0, avgVerses: "0" };
+    let activeDaysCount = 0;
+    const curr = new Date(setupStartDate);
+    const last = new Date(setupEndDate);
+
+    while (curr <= last) {
+      const dateStr = curr.toISOString().split("T")[0];
+      if (!isRestDay(dateStr, setupExcWk, setupExcHol)) {
+        activeDaysCount++;
+      }
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    const avg = activeDaysCount > 0 ? (404 / activeDaysCount).toFixed(1) : "0";
+    return { netDays: activeDaysCount, avgVerses: avg };
+  }, [setupStartDate, setupEndDate, setupExcWk, setupExcHol]);
   const [activeTab, setActiveTab] = useState<"dashboard" | "planner" | "read" | "key-verses" | "practice">("dashboard");
   const [selectedChapter, setSelectedChapter] = useState<number>(1);
   const [keyVersesSelectedChapter, setKeyVersesSelectedChapter] = useState<number>(1);
@@ -157,11 +245,20 @@ export default function RevelationMemorizer() {
     const savedUser = localStorage.getItem("rev_username");
     const savedToken = localStorage.getItem("rev_token");
     const savedLastSyncTime = localStorage.getItem("rev_last_sync_time");
+    const savedPlan = localStorage.getItem("rev_study_plan");
 
     if (savedProgress) setProgress(JSON.parse(savedProgress));
     if (savedNotes) setNotes(JSON.parse(savedNotes));
     if (savedHistory) setStudyHistory(JSON.parse(savedHistory));
     if (savedCompletedDays) setCompletedDays(JSON.parse(savedCompletedDays));
+    if (savedPlan) setStudyPlan(JSON.parse(savedPlan));
+
+    const todayStr = new Date().toISOString().split("T")[0];
+    const targetDate = new Date();
+    targetDate.setDate(targetDate.getDate() + 60);
+    const targetDateStr = targetDate.toISOString().split("T")[0];
+    setSetupStartDate(todayStr);
+    setSetupEndDate(targetDateStr);
     
     if (savedLastSyncTime) setLastSyncTime(savedLastSyncTime);
     if (savedTheme) {
@@ -230,11 +327,11 @@ export default function RevelationMemorizer() {
     if (!isLoggedIn || !loggedInUser || !sessionToken) return;
 
     const handler = setTimeout(() => {
-      triggerBackgroundUpload(progress, notes, studyHistory, completedDays);
+      triggerBackgroundUpload(progress, notes, studyHistory, completedDays, studyPlan);
     }, 1500); // 1.5s debounce
 
     return () => clearTimeout(handler);
-  }, [progress, notes, studyHistory, completedDays, isLoggedIn, loggedInUser, sessionToken]);
+  }, [progress, notes, studyHistory, completedDays, studyPlan, isLoggedIn, loggedInUser, sessionToken]);
 
   // Helper to save progress
   const saveProgress = (newProgress: VerseProgress) => {
@@ -269,11 +366,16 @@ export default function RevelationMemorizer() {
     localStorage.setItem("rev_notes", JSON.stringify(newNotes));
   };
 
-  // --- Partition Revelation into 81 Days (5 verses per day) ---
+  // --- Partition Revelation Dynamically based on Study Plan ---
   const getVersesForDay = (day: number): BibleVerse[] => {
-    const startIdx = (day - 1) * 5;
-    const endIdx = Math.min(day * 5, REVELATION_VERSES.length);
-    return REVELATION_VERSES.slice(startIdx, endIdx);
+    if (!studyPlan) {
+      const startIdx = (day - 1) * 5;
+      const endIdx = Math.min(day * 5, REVELATION_VERSES.length);
+      return REVELATION_VERSES.slice(startIdx, endIdx);
+    }
+    const daySched = studyPlan.schedule.find(s => s.day === day);
+    if (!daySched) return [];
+    return daySched.verseIndices.map(idx => REVELATION_VERSES[idx]);
   };
 
   const handleCompleteDay = (day: number) => {
@@ -288,6 +390,80 @@ export default function RevelationMemorizer() {
       newProgress[`${v.chapter}:${v.verse}`] = "learned";
     });
     saveProgress(newProgress);
+  };
+
+  // --- Dynamic Scheduler Generators ---
+  const generateStudyPlan = (
+    start: string,
+    end: string,
+    excWk: boolean,
+    excHol: boolean
+  ) => {
+    const activeDates: string[] = [];
+    const curr = new Date(start);
+    const last = new Date(end);
+
+    while (curr <= last) {
+      const dateStr = curr.toISOString().split("T")[0];
+      if (!isRestDay(dateStr, excWk, excHol)) {
+        activeDates.push(dateStr);
+      }
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    if (activeDates.length === 0) {
+      alert("❌ 선택하신 기간 내에 공부할 수 있는 날짜가 하루도 존재하지 않습니다. 기간을 조정해주세요.");
+      return;
+    }
+
+    const N = activeDates.length;
+    const baseCount = Math.floor(404 / N);
+    const remainder = 404 % N;
+
+    let currentVerseIdx = 0;
+    const schedule = activeDates.map((dateStr, index) => {
+      const count = baseCount + (index < remainder ? 1 : 0);
+      const indices: number[] = [];
+      for (let i = 0; i < count; i++) {
+        if (currentVerseIdx < 404) {
+          indices.push(currentVerseIdx);
+          currentVerseIdx++;
+        }
+      }
+      return {
+        day: index + 1,
+        date: dateStr,
+        verseIndices: indices
+      };
+    });
+
+    const newPlan: StudyPlan = {
+      startDate: start,
+      endDate: end,
+      excludeWeekends: excWk,
+      excludeHolidays: excHol,
+      totalDays: N,
+      schedule
+    };
+
+    setStudyPlan(newPlan);
+    localStorage.setItem("rev_study_plan", JSON.stringify(newPlan));
+    
+    setCompletedDays({});
+    localStorage.removeItem("rev_completed_days");
+
+    triggerBackgroundUpload(progress, notes, studyHistory, {}, newPlan);
+    alert(`📅 학습 계획이 수립되었습니다!\n총 학습일: ${N}일 (하루 평균 약 ${(404/N).toFixed(1)}구절)`);
+  };
+
+  const resetStudyPlan = () => {
+    if (confirm("정말 학습 계획을 재설정하시겠습니까?\n이전 계획의 일일 완료 기록은 초기화되지만, 개별 구절의 암기 상태(🟢🟡🔴)와 메모는 안전하게 유지됩니다.")) {
+      setStudyPlan(null);
+      setCompletedDays({});
+      localStorage.removeItem("rev_study_plan");
+      localStorage.removeItem("rev_completed_days");
+      triggerBackgroundUpload(progress, notes, studyHistory, {}, null);
+    }
   };
 
   // --- Korean Initial Consonant Extractor (초성) ---
@@ -681,8 +857,76 @@ export default function RevelationMemorizer() {
     };
   }, [progress]);
 
+  // Today Study Plan Status Calculator
+  const todayStudyStatus = useMemo(() => {
+    if (!studyPlan) return null;
+    
+    const d = new Date();
+    const offset = d.getTimezoneOffset();
+    const localDate = new Date(d.getTime() - offset * 60 * 1000);
+    const todayStr = localDate.toISOString().split("T")[0];
+    
+    const startDate = new Date(studyPlan.startDate);
+    const endDate = new Date(studyPlan.endDate);
+    const today = new Date(todayStr);
+    
+    startDate.setHours(0,0,0,0);
+    endDate.setHours(0,0,0,0);
+    today.setHours(0,0,0,0);
+    
+    if (today < startDate) {
+      const diffTime = startDate.getTime() - today.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      return {
+        status: "before",
+        dDay: `D-${diffDays}`,
+        todayStr,
+        displayMsg: `학습 시작 대기 중 (D-${diffDays})`,
+        currentDayNum: 0,
+        elapsedDays: 0
+      };
+    }
+    
+    if (today > endDate) {
+      return {
+        status: "completed",
+        todayStr,
+        displayMsg: "학습 기간 완료",
+        currentDayNum: studyPlan.totalDays,
+        elapsedDays: studyPlan.totalDays
+      };
+    }
+    
+    const todaySched = studyPlan.schedule.find(s => s.date === todayStr);
+    
+    const diffTime = today.getTime() - startDate.getTime();
+    const elapsedDays = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    
+    if (todaySched) {
+      return {
+        status: "study",
+        todayStr,
+        displayMsg: `학습 ${elapsedDays}일째 (스케줄 ${todaySched.day}일차)`,
+        currentDayNum: todaySched.day,
+        elapsedDays,
+        verses: todaySched.verseIndices.map(idx => REVELATION_VERSES[idx])
+      };
+    } else {
+      return {
+        status: "rest",
+        todayStr,
+        displayMsg: `학습 ${elapsedDays}일째 (오늘은 휴식일)`,
+        currentDayNum: null,
+        elapsedDays
+      };
+    }
+  }, [studyPlan]);
+
   // Streak calculator
   const currentStreak = useMemo(() => {
+    if (studyPlan && todayStudyStatus && todayStudyStatus.status === "before") {
+      return 0;
+    }
     if (studyHistory.length === 0) return 0;
     
     const dates = studyHistory
@@ -715,7 +959,7 @@ export default function RevelationMemorizer() {
       }
     }
     return streak;
-  }, [studyHistory]);
+  }, [studyHistory, studyPlan, todayStudyStatus]);
 
   // --- Day Study & Test Helpers ---
   const activeDayVerses = useMemo(() => {
@@ -724,17 +968,18 @@ export default function RevelationMemorizer() {
   }, [activeDay]);
 
   const handleStartDay = (dayNum: number) => {
+    const verses = getVersesForDay(dayNum);
     setActiveDay(dayNum);
     setDayStudyStep("study");
-    setDayTestAnswers(["", "", "", "", ""]);
-    setRevealStudyText([true, true, true, true, true]);
+    setDayTestAnswers(Array(verses.length).fill(""));
+    setRevealStudyText(Array(verses.length).fill(true));
     setActiveTestVerseIdx(0);
     stopTTS();
   };
 
   const handleGoToTest = () => {
     setDayStudyStep("test");
-    setDayTestAnswers(["", "", "", "", ""]);
+    setDayTestAnswers(Array(activeDayVerses.length).fill(""));
     setActiveTestVerseIdx(0);
     stopTTS();
   };
@@ -990,7 +1235,8 @@ export default function RevelationMemorizer() {
     currentProgress: VerseProgress,
     currentNotes: VerseNotes,
     currentHistory: StudyRecord[],
-    currentCompleted: { [key: number]: boolean }
+    currentCompleted: { [key: number]: boolean },
+    currentPlan: StudyPlan | null
   ) => {
     const username = localStorage.getItem("rev_username");
     const token = localStorage.getItem("rev_token");
@@ -1005,7 +1251,8 @@ export default function RevelationMemorizer() {
           progress: currentProgress,
           notes: currentNotes,
           studyHistory: currentHistory,
-          completedDays: currentCompleted
+          completedDays: currentCompleted,
+          studyPlan: currentPlan
         })
       });
       const nowStr = new Date().toLocaleString();
@@ -1068,17 +1315,29 @@ export default function RevelationMemorizer() {
       });
     }
 
+    // 5. Merge Study Plan (Overwrite with cloud version if present)
+    let mergedPlan = studyPlan;
+    if (cloudData.studyPlan) {
+      mergedPlan = cloudData.studyPlan;
+    }
+
     // Apply states
     setProgress(mergedProgress);
     setCompletedDays(mergedCompleted);
     setNotes(mergedNotes);
     setStudyHistory(mergedHistory);
+    setStudyPlan(mergedPlan);
 
     // Save to localStorage
     localStorage.setItem("rev_progress", JSON.stringify(mergedProgress));
     localStorage.setItem("rev_completed_days", JSON.stringify(mergedCompleted));
     localStorage.setItem("rev_notes", JSON.stringify(mergedNotes));
     localStorage.setItem("rev_history", JSON.stringify(mergedHistory));
+    if (mergedPlan) {
+      localStorage.setItem("rev_study_plan", JSON.stringify(mergedPlan));
+    } else {
+      localStorage.removeItem("rev_study_plan");
+    }
   };
 
   if (authChecking) {
@@ -1369,28 +1628,164 @@ export default function RevelationMemorizer() {
           </div>
         )}
 
+        {/* --- STUDY PLAN SETUP SCREEN (Shown when logged in but no active plan, for Dashboard & Planner tabs) --- */}
+        {(activeTab === "dashboard" || activeTab === "planner") && studyPlan === null && activeDay === null && activeChapterTest === null && (
+          <div className="max-w-2xl mx-auto space-y-6 animate-fade-in py-8">
+            <div className={`p-8 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-xl"}`}>
+              
+              <div className="text-center mb-8 border-b border-zinc-800/80 pb-6">
+                <div className="p-3 w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 text-white shadow-lg shadow-emerald-500/20 mx-auto mb-4 flex items-center justify-center">
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                  </svg>
+                </div>
+                <h2 className="text-2xl font-black bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
+                  나만의 계시록 암송 계획 수립
+                </h2>
+                <p className="text-xs text-zinc-400 mt-2">
+                  요한계시록 전체 22장 404구절을 공부할 기간과 조건을 선택하세요.<br />
+                  설정하신 내용에 맞춰 매일 공부할 구절이 자동으로 균등 분배됩니다.
+                </p>
+              </div>
+
+              <div className="space-y-6">
+                {/* Dates selection grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-zinc-400">학습 시작일</label>
+                    <input
+                      type="date"
+                      value={setupStartDate}
+                      onChange={(e) => setSetupStartDate(e.target.value)}
+                      className={`w-full px-4 py-2.5 text-sm rounded-xl border outline-none font-medium transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-zinc-400">학습 목표 종료일</label>
+                    <input
+                      type="date"
+                      value={setupEndDate}
+                      onChange={(e) => setSetupEndDate(e.target.value)}
+                      className={`w-full px-4 py-2.5 text-sm rounded-xl border outline-none font-medium transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                    />
+                  </div>
+                </div>
+
+                {/* Exclude option switches */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                  <label className={`p-4 rounded-2xl border flex items-center justify-between cursor-pointer transition-all duration-300 ${darkMode ? "bg-zinc-800/40 border-zinc-800 hover:bg-zinc-800" : "bg-slate-50 border-slate-100 hover:bg-slate-100"}`}>
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-bold block text-zinc-200">주말 제외 (토, 일)</span>
+                      <span className="text-[10px] text-zinc-400 block">토요일과 일요일은 학습을 쉽니다.</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={setupExcWk}
+                      onChange={(e) => setSetupExcWk(e.target.checked)}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 h-4 w-4"
+                    />
+                  </label>
+
+                  <label className={`p-4 rounded-2xl border flex items-center justify-between cursor-pointer transition-all duration-300 ${darkMode ? "bg-zinc-800/40 border-zinc-800 hover:bg-zinc-800" : "bg-slate-50 border-slate-100 hover:bg-slate-100"}`}>
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-bold block text-zinc-200">공휴일 / 빨간날 제외</span>
+                      <span className="text-[10px] text-zinc-400 block">신정, 설날, 추석 등 공휴일을 쉽니다.</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={setupExcHol}
+                      onChange={(e) => setSetupExcHol(e.target.checked)}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 h-4 w-4"
+                    />
+                  </label>
+                </div>
+
+                {/* Live Preview Info Area */}
+                <div className={`p-5 rounded-2xl border space-y-3 transition-colors ${darkMode ? "bg-zinc-950/50 border-zinc-800/60" : "bg-emerald-50/10 border-emerald-100"}`}>
+                  <h4 className="text-xs font-bold text-emerald-400">📊 계획 실시간 계산 결과</h4>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="p-2.5 rounded-xl bg-zinc-800/40">
+                      <span className="text-[10px] text-zinc-400 block mb-0.5">총 학습일수</span>
+                      <span className="text-sm font-extrabold text-white">{setupPreviewStats.netDays}일</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-zinc-800/40 col-span-2">
+                      <span className="text-[10px] text-zinc-400 block mb-0.5">하루 평균 분량</span>
+                      <span className="text-sm font-extrabold text-amber-400">약 {setupPreviewStats.avgVerses} 구절 / 일</span>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-zinc-400 text-center leading-relaxed">
+                    ※ 총 404구절 대상 / 제외 설정(주말 및 휴일)이 실시간 적용된 수치입니다.
+                  </div>
+                </div>
+
+                {/* Generate Button */}
+                <button
+                  onClick={() => generateStudyPlan(setupStartDate, setupEndDate, setupExcWk, setupExcHol)}
+                  className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white text-sm font-black rounded-2xl transition-all shadow-lg shadow-emerald-500/10 active:scale-[0.98]"
+                >
+                  📅 이 계획으로 암송 시작하기
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
         {/* --- TAB 1: DASHBOARD --- */}
-        {activeTab === "dashboard" && activeDay === null && activeChapterTest === null && (
+        {activeTab === "dashboard" && studyPlan !== null && activeDay === null && activeChapterTest === null && (
           <div className="space-y-6 animate-fade-in">
             {/* Quick summary header banner */}
             <div className="p-6 rounded-3xl bg-gradient-to-r from-emerald-800/80 to-teal-700/80 text-white shadow-xl flex flex-col md:flex-row justify-between items-center gap-6">
               <div className="space-y-2 text-center md:text-left">
-                <h2 className="text-2xl font-black">📖 매일 5구절 암송 플래너</h2>
+                <div className="flex items-center gap-2.5 justify-center md:justify-start">
+                  <h2 className="text-2xl font-black">📖 나만의 계시록 암송 플래너</h2>
+                  <button
+                    onClick={resetStudyPlan}
+                    className="px-2 py-1 bg-white/20 hover:bg-white/30 text-white rounded-lg text-[10px] font-bold transition-all flex items-center gap-1 select-none"
+                    title="학습 계획 초기화 및 다시 짜기"
+                  >
+                    🔄 계획 재설정
+                  </button>
+                </div>
                 <p className="text-zinc-100 text-sm max-w-xl">
-                  요한계시록 전체 22장 404구절을 하루에 5구절씩 81일간 체계적으로 학습하고 점검할 수 있도록 완성된 일일 플래너입니다. 말씀을 매일 마음에 깊이 새겨보세요.
+                  {studyPlan.startDate} ~ {studyPlan.endDate} 동안 총 {studyPlan.totalDays}일에 걸쳐 요한계시록 전체 404구절을 암송하는 계획입니다.
                 </p>
-                <div className="flex gap-2 justify-center md:justify-start pt-2">
-                  <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🎯 하루 5구절 목표</span>
-                  <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🗓️ 81일 과정</span>
-                  <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🔊 오디오 낭독 탑재</span>
+                <div className="flex gap-2 justify-center md:justify-start pt-2 flex-wrap">
+                  <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🎯 하루 평균 {(404 / studyPlan.totalDays).toFixed(1)}구절</span>
+                  <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🗓️ {studyPlan.totalDays}일 과정</span>
+                  {studyPlan.excludeWeekends && <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">☕ 주말 휴식</span>}
+                  {studyPlan.excludeHolidays && <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🎈 공휴일 휴식</span>}
                 </div>
               </div>
-              <button
-                onClick={() => setActiveTab("planner")}
-                className="px-6 py-3 rounded-2xl bg-white text-emerald-800 font-extrabold text-sm hover:scale-105 transition-all shadow-md"
-              >
-                📅 플래너 시작하기
-              </button>
+              
+              {todayStudyStatus && (
+                <div className="flex flex-col items-center gap-2">
+                  {todayStudyStatus.status === "study" && todayStudyStatus.currentDayNum ? (
+                    <button
+                      onClick={() => handleStartDay(todayStudyStatus.currentDayNum!)}
+                      className="px-6 py-3 rounded-2xl bg-white text-emerald-800 font-extrabold text-sm hover:scale-105 transition-all shadow-md whitespace-nowrap"
+                    >
+                      🔥 오늘의 학습 ({todayStudyStatus.currentDayNum}일차) 시작
+                    </button>
+                  ) : todayStudyStatus.status === "before" ? (
+                    <div className="px-5 py-3 rounded-2xl bg-zinc-950/40 border border-white/10 text-center">
+                      <span className="text-xs text-zinc-300 block mb-0.5">학습 시작일까지</span>
+                      <span className="text-lg font-black text-amber-300">{todayStudyStatus.dDay}</span>
+                    </div>
+                  ) : todayStudyStatus.status === "rest" ? (
+                    <button
+                      onClick={() => setActiveTab("planner")}
+                      className="px-6 py-3 rounded-2xl bg-white/90 hover:bg-white text-emerald-800 font-extrabold text-sm hover:scale-105 transition-all shadow-md whitespace-nowrap"
+                    >
+                      ☕ 오늘은 휴식일 (일정 보기)
+                    </button>
+                  ) : (
+                    <div className="px-5 py-3 rounded-2xl bg-zinc-950/40 border border-white/10 text-center">
+                      <span className="text-xs text-zinc-300 block">🏆 암송 계획 완주 완료!</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1447,6 +1842,32 @@ export default function RevelationMemorizer() {
                     <span className="text-xs text-zinc-400 ml-1">일째</span>
                   </div>
                 </div>
+
+                {/* 학습 계획 진행 현황 카드 */}
+                {studyPlan && todayStudyStatus && (
+                  <div className={`mt-4 p-4 rounded-2xl border transition-colors ${darkMode ? "bg-zinc-800/40 border-zinc-800 text-zinc-200" : "bg-slate-50 border-slate-200 text-slate-800"}`}>
+                    <h4 className="text-xs font-bold text-emerald-500 mb-2">📅 학습 계획 진행 현황</h4>
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-bold block">{todayStudyStatus.displayMsg}</span>
+                        <span className="text-[10px] text-zinc-400 block">계획 기간: {studyPlan.startDate} ~ {studyPlan.endDate}</span>
+                      </div>
+                      <div className="text-right">
+                        {todayStudyStatus.status === "before" ? (
+                          <span className="text-xs font-extrabold text-amber-400 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/20">{todayStudyStatus.dDay}</span>
+                        ) : todayStudyStatus.status === "completed" ? (
+                          <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20">완주 완료 🏆</span>
+                        ) : todayStudyStatus.status === "rest" ? (
+                          <span className="text-xs font-extrabold text-teal-400 bg-teal-500/10 px-2 py-1 rounded-lg border border-teal-500/20">휴식일 ☕</span>
+                        ) : (
+                          <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20">
+                            {todayStudyStatus.currentDayNum} / {studyPlan.totalDays} 일차
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Right Column: Chapter Progress Cards */}
@@ -1488,24 +1909,28 @@ export default function RevelationMemorizer() {
         )}
 
         {/* --- TAB 2: DAILY PLANNER (하루 5구절 플래너) --- */}
-        {activeTab === "planner" && activeDay === null && (
+        {activeTab === "planner" && studyPlan !== null && activeDay === null && (
           <div className="space-y-6 animate-fade-in">
             <div className="flex justify-between items-center flex-wrap gap-2">
               <div>
-                <h3 className="text-xl font-extrabold">81일 일일 암송 스케줄러</h3>
-                <p className="text-xs text-zinc-400">매일 5구절씩 마스터하여 81일 동안 요한계시록 전체를 공부하고 시험을 통과하세요!</p>
+                <h3 className="text-xl font-extrabold">나만의 일일 암송 스케줄러</h3>
+                <p className="text-xs text-zinc-400">
+                  {studyPlan.startDate} ~ {studyPlan.endDate} 동안 총 {studyPlan.totalDays}일에 걸쳐 요한계시록을 공부하는 계획입니다.
+                </p>
               </div>
               <div className="bg-emerald-600/10 border border-emerald-500/20 text-emerald-400 px-4 py-2 rounded-xl text-sm font-semibold">
-                🏆 완주한 날짜: <span className="font-bold text-lg">{Object.keys(completedDays).length}</span> / 81일
+                🏆 완주한 날짜: <span className="font-bold text-lg">{Object.keys(completedDays).length}</span> / {studyPlan.totalDays}일
               </div>
             </div>
 
             {/* Days Grid list */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {Array.from({ length: 81 }, (_, i) => {
+              {Array.from({ length: studyPlan.totalDays }, (_, i) => {
                 const dayNum = i + 1;
                 const verses = getVersesForDay(dayNum);
                 const isCompleted = completedDays[dayNum];
+                const daySched = studyPlan.schedule[i];
+                const dateDisplay = daySched ? `${daySched.date} (${getDayOfWeek(daySched.date)})` : "";
                 
                 // Get display bounds
                 const startRef = verses.length > 0 ? `${verses[0].chapter}:${verses[0].verse}` : "";
@@ -1530,8 +1955,11 @@ export default function RevelationMemorizer() {
                     }`}
                   >
                     <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-extrabold text-sm text-zinc-400">{dayNum}일차</span>
+                      <div className="flex justify-between items-center mb-2 pb-1 border-b border-zinc-800/40">
+                        <div className="flex flex-col">
+                          <span className="font-extrabold text-sm text-zinc-300">{dayNum}일차</span>
+                          {dateDisplay && <span className="text-[10px] text-zinc-500 font-medium">{dateDisplay}</span>}
+                        </div>
                         {isCompleted ? (
                           <span className="text-xs font-bold text-amber-500 flex items-center gap-0.5">🏆 완료</span>
                         ) : percent > 0 ? (
@@ -1610,11 +2038,11 @@ export default function RevelationMemorizer() {
               <div className="space-y-6">
                 <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
                   <div className="flex justify-between items-center mb-6 pb-4 border-b border-zinc-800/80">
-                    <span className="text-sm text-zinc-400">📖 오늘의 5구절 본문을 정독하고 음성을 들으며 눈으로 익히세요.</span>
+                    <span className="text-sm text-zinc-400">📖 오늘의 {activeDayVerses.length}구절 본문을 정독하고 음성을 들으며 눈으로 익히세요.</span>
                     <button
                       onClick={() => {
                         const allHidden = revealStudyText.every(x => !x);
-                        setRevealStudyText(Array(5).fill(allHidden));
+                        setRevealStudyText(Array(activeDayVerses.length).fill(allHidden));
                       }}
                       className="text-xs bg-zinc-800 border border-zinc-700 px-3 py-1.5 rounded-xl text-zinc-300"
                     >
@@ -1866,12 +2294,12 @@ export default function RevelationMemorizer() {
                   <div className="text-6xl mb-4 animate-bounce">🏆</div>
                   <h3 className="text-2xl font-black text-emerald-400">{activeDay}일차 학습 통과!</h3>
                   <p className="text-zinc-400 text-sm max-w-md mx-auto mt-2">
-                    오늘 목표인 5구절 암송 시험을 모두 정답으로 통과하였습니다. 이 기세로 81일 완주까지 전진하세요!
+                    오늘 목표인 {activeDayVerses.length}구절 암송 시험을 모두 정답으로 통과하였습니다. 이 기세로 {studyPlan ? studyPlan.totalDays : 81}일 완주까지 전진하세요!
                   </p>
                 </div>
 
                 <div className="p-4 bg-emerald-500/5 rounded-2xl border border-emerald-500/10 text-xs max-w-sm mx-auto text-emerald-300 font-medium">
-                  ✔️ 암기 상태 업데이트: 오늘 통과한 5구절의 암기 마크가 대시보드에서 자동으로 &apos;암기 완료&apos;로 변경되었습니다.
+                  ✔️ 암기 상태 업데이트: 오늘 통과한 {activeDayVerses.length}구절의 암기 마크가 대시보드에서 자동으로 &apos;암기 완료&apos;로 변경되었습니다.
                 </div>
 
                 <div className="flex justify-center gap-3">
@@ -1881,7 +2309,7 @@ export default function RevelationMemorizer() {
                   >
                     목록으로 가기
                   </button>
-                  {activeDay < 81 && (
+                  {activeDay < (studyPlan ? studyPlan.totalDays : 81) && (
                     <button
                       onClick={() => handleStartDay(activeDay + 1)}
                       className="px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold shadow-md shadow-emerald-500/20"

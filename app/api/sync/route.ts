@@ -32,6 +32,7 @@ export async function GET(request: Request) {
       notes: user.notes || {},
       studyHistory: user.studyHistory || [],
       completedDays: user.completedDays || {},
+      studyPlan: user.studyPlan || null,
       updatedAt: user.updatedAt,
     });
   } catch (e) {
@@ -46,7 +47,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { username, token, progress, notes, studyHistory, completedDays } = body;
+    const { username, token, progress, notes, studyHistory, completedDays, studyPlan } = body;
 
     if (!username || !token) {
       return NextResponse.json(
@@ -122,6 +123,9 @@ export async function POST(request: Request) {
     user.completedDays = mergedCompleted;
     user.notes = mergedNotes;
     user.studyHistory = mergedHistory;
+    if (studyPlan !== undefined) {
+      user.studyPlan = studyPlan;
+    }
     user.updatedAt = new Date().toISOString();
 
     await writeDb(db);
@@ -136,6 +140,7 @@ export async function POST(request: Request) {
         completedDays: mergedCompleted,
         notes: mergedNotes,
         studyHistory: mergedHistory,
+        studyPlan: user.studyPlan || null,
       }
     });
   } catch (e) {
