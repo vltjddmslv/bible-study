@@ -1,12 +1,15 @@
-import fs from "fs";
-import path from "path";
 import crypto from "crypto";
+import { Pool } from "pg";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-const DB_FILE = path.join(DATA_DIR, "users.json");
+const connectionString = process.env.DATABASE_URL || "postgresql://neondb_owner:npg_Cymk8Dd7hNUp@ep-crimson-math-aou4n1yr.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require";
 
-// Private persistent cloud bucket name for this project on kvdb.io
-const CLOUD_DB_URL = "https://kvdb.io/4yCezdK1C7kX3j2sUeNypv/all_users";
+// Create a connection pool to Neon PostgreSQL
+const pool = new Pool({
+  connectionString,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
 export interface UserData {
   passwordHash: string;
@@ -25,70 +28,105 @@ export interface DbSchema {
   };
 }
 
-let dbCache: DbSchema | null = null;
+let isInitialized = false;
 
-function initializeLocalDb() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify({ users: {} }, null, 2));
+// Initialize table if it doesn't exist
+async function initDb() {
+  if (isInitialized) return;
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        username VARCHAR(255) PRIMARY KEY,
+        password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        progress JSONB DEFAULT '{}'::jsonb,
+        notes JSONB DEFAULT '{}'::jsonb,
+        study_history JSONB DEFAULT '[]'::jsonb,
+        completed_days JSONB DEFAULT '{}'::jsonb,
+        token TEXT,
+        updated_at TEXT
+      );
+    `);
+    isInitialized = true;
+  } catch (error) {
+    console.error("Failed to initialize database table in PostgreSQL", error);
+  } finally {
+    client.release();
   }
 }
 
-// Read the database asynchronously (checks cloud, falls back to local)
+// Read the database asynchronously from PostgreSQL
 export async function readDb(): Promise<DbSchema> {
-  // Try fetching from the cloud database first
+  await initDb();
+  const client = await pool.connect();
   try {
-    const res = await fetch(CLOUD_DB_URL, {
-      method: "GET",
-      headers: { "Cache-Control": "no-cache" },
+    const res = await client.query("SELECT * FROM users");
+    const users: { [username: string]: UserData } = {};
+    
+    res.rows.forEach((row) => {
+      users[row.username] = {
+        passwordHash: row.password_hash,
+        salt: row.salt,
+        progress: row.progress || {},
+        notes: row.notes || {},
+        studyHistory: row.study_history || [],
+        completedDays: row.completed_days || {},
+        token: row.token || undefined,
+        updatedAt: row.updated_at || new Date().toISOString(),
+      };
     });
-    if (res.ok) {
-      const data = await res.json();
-      dbCache = data;
-      return data;
-    }
+    
+    return { users };
   } catch (e) {
-    console.warn("Could not read from cloud DB, falling back to local storage...", e);
-  }
-
-  // Fallback to local file
-  if (dbCache) return dbCache;
-  initializeLocalDb();
-  try {
-    const content = fs.readFileSync(DB_FILE, "utf-8");
-    dbCache = JSON.parse(content);
-    return dbCache!;
-  } catch (e) {
+    console.error("PostgreSQL read query failed", e);
     return { users: {} };
+  } finally {
+    client.release();
   }
 }
 
-// Write to the database (saves to local file and syncs to cloud)
+// Write to the database by upserting users into PostgreSQL
 export async function writeDb(data: DbSchema): Promise<void> {
-  dbCache = data;
-
-  // 1. Write to local file for offline usage
+  await initDb();
+  const client = await pool.connect();
   try {
-    initializeLocalDb();
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.error("Local file database write failed", e);
-  }
-
-  // 2. Synchronize to the cloud database for serverless persistence
-  try {
-    const response = await fetch(CLOUD_DB_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) {
-      console.error("Cloud DB write returned non-OK response:", response.status);
+    // Perform transactional inserts/updates to avoid race conditions or partial updates
+    await client.query("BEGIN");
+    for (const username of Object.keys(data.users)) {
+      const u = data.users[username];
+      await client.query(
+        `INSERT INTO users (username, password_hash, salt, progress, notes, study_history, completed_days, token, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (username) DO UPDATE SET
+           password_hash = EXCLUDED.password_hash,
+           salt = EXCLUDED.salt,
+           progress = EXCLUDED.progress,
+           notes = EXCLUDED.notes,
+           study_history = EXCLUDED.study_history,
+           completed_days = EXCLUDED.completed_days,
+           token = EXCLUDED.token,
+           updated_at = EXCLUDED.updated_at`,
+        [
+          username,
+          u.passwordHash,
+          u.salt,
+          JSON.stringify(u.progress || {}),
+          JSON.stringify(u.notes || {}),
+          JSON.stringify(u.studyHistory || []),
+          JSON.stringify(u.completedDays || {}),
+          u.token || null,
+          u.updatedAt || new Date().toISOString()
+        ]
+      );
     }
+    await client.query("COMMIT");
   } catch (e) {
-    console.error("Cloud DB write failed", e);
+    await client.query("ROLLBACK");
+    console.error("PostgreSQL write/sync transaction failed", e);
+    throw e;
+  } finally {
+    client.release();
   }
 }
 
