@@ -19,7 +19,7 @@ const notoSansKr = Noto_Sans_KR({
 });
 
 export const metadata: Metadata = {
-  title: "요한계시록 암기 플래너",
+  title: "계시록 완벽숙지",
   description: "성경 공부 및 암송 시험 점검 최적화 프로그램",
 };
 
