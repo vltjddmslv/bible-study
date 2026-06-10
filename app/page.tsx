@@ -86,6 +86,58 @@ export default function RevelationMemorizer() {
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
+  // --- Auto-auth Default User logic ---
+  const ensureDefaultUser = async () => {
+    const defaultUsername = "bible_study_user";
+    const defaultPassword = "default_password_rev_study";
+
+    // 1. Try to login first
+    try {
+      const loginRes = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: defaultUsername, password: defaultPassword })
+      });
+      if (loginRes.ok) {
+        const loginData = await loginRes.json();
+        localStorage.setItem("rev_username", loginData.username);
+        localStorage.setItem("rev_token", loginData.token);
+        setLoggedInUser(loginData.username);
+        setSessionToken(loginData.token);
+        setIsLoggedIn(true);
+        return;
+      }
+    } catch (err) {
+      console.error("Auto login failed, trying register", err);
+    }
+
+    // 2. If login failed, try to register
+    try {
+      const regRes = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: defaultUsername, password: defaultPassword })
+      });
+      if (regRes.ok) {
+        const loginRes = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: defaultUsername, password: defaultPassword })
+        });
+        if (loginRes.ok) {
+          const loginData = await loginRes.json();
+          localStorage.setItem("rev_username", loginData.username);
+          localStorage.setItem("rev_token", loginData.token);
+          setLoggedInUser(loginData.username);
+          setSessionToken(loginData.token);
+          setIsLoggedIn(true);
+        }
+      }
+    } catch (err) {
+      console.error("Auto registration/login failed", err);
+    }
+  };
+
   // --- Initialize LocalStorage and TTS ---
   useEffect(() => {
     const savedProgress = localStorage.getItem("rev_progress");
@@ -101,11 +153,7 @@ export default function RevelationMemorizer() {
     if (savedNotes) setNotes(JSON.parse(savedNotes));
     if (savedHistory) setStudyHistory(JSON.parse(savedHistory));
     if (savedCompletedDays) setCompletedDays(JSON.parse(savedCompletedDays));
-    if (savedUser && savedToken) {
-      setIsLoggedIn(true);
-      setLoggedInUser(savedUser);
-      setSessionToken(savedToken);
-    }
+    
     if (savedLastSyncTime) setLastSyncTime(savedLastSyncTime);
     if (savedTheme) {
       setDarkMode(savedTheme === "dark");
@@ -116,6 +164,18 @@ export default function RevelationMemorizer() {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       synthRef.current = window.speechSynthesis;
     }
+
+    // Run auto-authentication in background
+    const runAutoAuth = async () => {
+      if (savedUser && savedToken) {
+        setIsLoggedIn(true);
+        setLoggedInUser(savedUser);
+        setSessionToken(savedToken);
+      } else {
+        await ensureDefaultUser();
+      }
+    };
+    runAutoAuth();
 
     return () => {
       if (synthRef.current) {
@@ -899,150 +959,10 @@ export default function RevelationMemorizer() {
 
   if (!isLoggedIn) {
     return (
-      <div className={`min-h-screen flex items-center justify-center transition-colors duration-300 font-sans p-4 relative ${darkMode ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-slate-900"}`}>
-        {/* Sleek Theme Switcher in Corner of Login page */}
-        <div className="absolute top-4 right-4">
-          <button
-            onClick={() => setDarkMode(!darkMode)}
-            className={`p-2 rounded-lg transition-colors border ${darkMode ? "bg-zinc-900 border-zinc-850 hover:bg-zinc-800 text-yellow-400" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"}`}
-            title="테마 변경"
-          >
-            {darkMode ? (
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m2.828 0l-.707-.707m12.828-12.828l-.707-.707M8.364 8.364l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z"></path></svg>
-            ) : (
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
-            )}
-          </button>
-        </div>
-
-        <div className={`w-full max-w-md p-8 rounded-3xl border shadow-2xl transition-all duration-300 ${darkMode ? "bg-zinc-900/50 backdrop-blur-lg border-zinc-800" : "bg-white border-slate-200"}`}>
-          <div className="text-center mb-8">
-            <div className="inline-flex p-3.5 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 text-white shadow-lg shadow-emerald-500/25 mb-4">
-              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
-              </svg>
-            </div>
-            <h1 className="text-2xl font-black tracking-tight bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">계시록 완벽숙지</h1>
-            <p className="text-xs text-zinc-400 mt-1.5">성경 공부 및 암송 시험 점검을 위한 계정 기반 연동 플래너</p>
-          </div>
-
-          <form onSubmit={isRegisterMode ? handleRegister : handleLogin} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="block text-xs font-bold text-zinc-400">아이디</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  placeholder="아이디를 입력하세요"
-                  value={loginId}
-                  onChange={(e) => setLoginId(e.target.value)}
-                  disabled={syncLoading}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className={`w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
-                />
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">👤</span>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="block text-xs font-bold text-zinc-400">비밀번호</label>
-              <div className="relative">
-                <input
-                  type={showPw ? "text" : "password"}
-                  placeholder="비밀번호를 입력하세요"
-                  value={loginPw}
-                  onChange={(e) => setLoginPw(e.target.value)}
-                  disabled={syncLoading}
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  className={`w-full pl-10 pr-10 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
-                />
-                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">🔑</span>
-                <button
-                  type="button"
-                  onClick={() => setShowPw(!showPw)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 focus:outline-none"
-                  title={showPw ? "비밀번호 숨기기" : "비밀번호 보기"}
-                >
-                  {showPw ? (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
-                    </svg>
-                  ) : (
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                    </svg>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {isRegisterMode && (
-              <div className="space-y-1.5 animate-fade-in">
-                <label className="block text-xs font-bold text-zinc-400">비밀번호 확인</label>
-                <div className="relative">
-                  <input
-                    type={showPwConfirm ? "text" : "password"}
-                    placeholder="비밀번호를 다시 한번 입력하세요"
-                    value={loginPwConfirm}
-                    onChange={(e) => setLoginPwConfirm(e.target.value)}
-                    disabled={syncLoading}
-                    autoCapitalize="none"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    className={`w-full pl-10 pr-10 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
-                  />
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">🔒</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowPwConfirm(!showPwConfirm)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 focus:outline-none"
-                    title={showPwConfirm ? "비밀번호 숨기기" : "비밀번호 보기"}
-                  >
-                    {showPwConfirm ? (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
-                      </svg>
-                    ) : (
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
-                      </svg>
-                    )}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <p className="text-[10.5px] text-zinc-400 leading-normal bg-zinc-800/10 p-2.5 rounded-xl border border-zinc-800/20">
-              ⚠️ **비밀번호 작성 가이드**: 영문 대소문자, 숫자, 키보드 특수문자 조합이 모두 가능하며 **최소 4글자 이상**으로 자유롭게 만드시면 됩니다.
-            </p>
-
-            <button
-              type="submit"
-              disabled={syncLoading}
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-extrabold rounded-xl transition-all shadow-lg shadow-emerald-500/15"
-            >
-              {syncLoading ? "처리 중..." : isRegisterMode ? "회원가입하기" : "로그인하기"}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setIsRegisterMode(!isRegisterMode);
-                setLoginPw("");
-                setLoginPwConfirm("");
-                setShowPw(false);
-                setShowPwConfirm(false);
-              }}
-              className="w-full text-center text-xs text-zinc-400 hover:text-zinc-200 underline mt-2 block"
-            >
-              {isRegisterMode ? "이미 계정이 있으신가요? 로그인하기" : "처음이신가요? 3초 회원가입하기"}
-            </button>
-          </form>
+      <div className={`min-h-screen flex flex-col items-center justify-center transition-colors duration-300 font-sans p-4 ${darkMode ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-slate-900"}`}>
+        <div className="text-center space-y-4">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500 mx-auto"></div>
+          <p className="text-sm font-bold text-zinc-400">데이터베이스 연결 및 진행상황 동기화 중...</p>
         </div>
       </div>
     );
@@ -1325,98 +1245,7 @@ export default function RevelationMemorizer() {
                 </div>
               </div>
 
-              {/* Advanced Study Storage: Sync & Backup Panel */}
-              <div className={`p-6 rounded-3xl border lg:col-span-3 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"} grid grid-cols-1 md:grid-cols-2 gap-8`}>
-                
-                {/* Left side: Cloud Synchronization (PC <-> Mobile) */}
-                <div className="space-y-4">
-                  <h3 className="text-base font-bold text-emerald-400 flex items-center gap-2">
-                    🔑 기기간 계정 동기화 (PC ↔ 모바일 ↔ 태블릿)
-                  </h3>
-                  <p className="text-xs text-zinc-400 leading-relaxed">
-                    나만의 아이디와 비밀번호로 로그인하여 여러 기기에서 학습 진도를 실시간으로 동기화합니다. 학습을 진행하면 **배경에서 자동으로 저장**되어 간편합니다.
-                  </p>
 
-                  {isLoggedIn && (
-                    // Logged In Status & Manual Sync Actions
-                    <div className="space-y-3 pt-2">
-                      <div className="p-3.5 rounded-2xl bg-zinc-800/40 border border-zinc-800/60 text-xs space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-zinc-400">로그인 계정:</span>
-                          <span className="font-bold text-emerald-400 text-sm">👤 {loggedInUser}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-[11px]">
-                          <span className="text-zinc-400">최근 서버 동기화:</span>
-                          <span className="text-zinc-300 font-semibold">{lastSyncTime || "진행 기록 없음"}</span>
-                        </div>
-                        <div className="text-[10px] text-zinc-500 leading-relaxed pt-1 border-t border-zinc-800/50">
-                          ✨ 공부 상태 변경 시 백그라운드에서 자동으로 클라우드에 백업 및 동기화됩니다.
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        <button
-                          onClick={handleUploadToCloud}
-                          disabled={syncLoading}
-                          className="flex-1 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap"
-                        >
-                          📤 진행상황 수동 백업 (업로드)
-                        </button>
-                        <button
-                          onClick={handleDownloadAndMerge}
-                          disabled={syncLoading}
-                          className="flex-1 px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-xl transition-colors whitespace-nowrap"
-                        >
-                          📥 서버 기록 가져와 병합 (다운로드)
-                        </button>
-                        <button
-                          onClick={handleLogout}
-                          className="px-3 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-400 hover:text-zinc-200 text-xs font-bold rounded-xl transition-colors"
-                          title="로그아웃"
-                        >
-                          로그아웃
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Right side: File Backup & Restore */}
-                <div className="space-y-4 border-t md:border-t-0 md:border-l border-zinc-800/80 pt-6 md:pt-0 md:pl-8">
-                  <h3 className="text-base font-bold text-zinc-300 flex items-center gap-2">
-                    💾 수동 파일 백업 및 불러오기
-                  </h3>
-                  <p className="text-xs text-zinc-400 leading-relaxed">
-                    클라우드 서버 연동 없이 암송 기록 데이터를 즉시 내보내거나 가져옵니다. 다른 기기로 데이터를 이동할 때 안전하게 백업용 파일로 저장해 둘 수 있습니다.
-                  </p>
-                  
-                  <div className="space-y-3 pt-2">
-                    <button
-                      onClick={handleBackupData}
-                      className="w-full px-4 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors"
-                    >
-                      📥 내 암송 데이터 백업 다운로드 (.json)
-                    </button>
-                    
-                    <div className="relative">
-                      <input
-                        type="file"
-                        accept=".json"
-                        onChange={handleRestoreData}
-                        id="restore-file-input"
-                        className="hidden"
-                      />
-                      <label
-                        htmlFor="restore-file-input"
-                        className="w-full px-4 py-2.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors cursor-pointer text-center"
-                      >
-                        📤 백업 파일 복원 및 누적 병합
-                      </label>
-                    </div>
-                  </div>
-                </div>
-
-              </div>
 
             </div>
           </div>
