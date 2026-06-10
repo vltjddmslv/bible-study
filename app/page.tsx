@@ -75,6 +75,7 @@ export default function RevelationMemorizer() {
 
   // --- Login-based Sync States ---
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
+  const [authChecking, setAuthChecking] = useState<boolean>(true);
   const [loggedInUser, setLoggedInUser] = useState<string>("");
   const [sessionToken, setSessionToken] = useState<string>("");
   const [loginId, setLoginId] = useState<string>("");
@@ -175,13 +176,13 @@ export default function RevelationMemorizer() {
 
     // Run auto-authentication in background
     const runAutoAuth = async () => {
+      setAuthChecking(true);
       if (savedUser && savedToken) {
         setIsLoggedIn(true);
         setLoggedInUser(savedUser);
         setSessionToken(savedToken);
-      } else {
-        await ensureDefaultUser();
       }
+      setAuthChecking(false);
     };
     runAutoAuth();
 
@@ -431,9 +432,9 @@ export default function RevelationMemorizer() {
     const cleanedInput = cleanVerseMarker(input);
     const cleanedTarget = cleanVerseMarker(target);
 
-    // Normalize spacing
-    const normalizedInput = cleanedInput.replace(/\s+/g, " ");
-    const normalizedTarget = cleanedTarget.replace(/\s+/g, " ");
+    // Remove all spaces for spacing-independent check
+    const normalizedInput = cleanedInput.replace(/\s+/g, "");
+    const normalizedTarget = cleanedTarget.replace(/\s+/g, "");
 
     if (normalizedInput === "") return null;
 
@@ -441,6 +442,104 @@ export default function RevelationMemorizer() {
     const isComplete = normalizedTarget === normalizedInput;
 
     return { isMatch, isComplete };
+  };
+
+  // --- Dynamic Diff Feedback Markup Visualizer ---
+  const renderDiffFeedback = (input: string, target: string, mode: "full" | "initial") => {
+    const cleanVerseMarker = (str: string): string => {
+      return str
+        .replace(/^\s*\[?\d+장\s*\d+절\]?\s*/, "")
+        .replace(/^\s*\[?\d+[:.]\d+\]?\s*/, "")
+        .replace(/^\s*[:.]\d+\s*/, "")
+        .replace(/^\s*\d+절\s*/, "")
+        .replace(/^\s*\d+\.\s*/, "")
+        .replace(/^\s*\d+\s+/, "")
+        .trim();
+    };
+
+    const resolvedTarget = mode === "initial" ? getInitials(target) : target;
+    const resolvedInput = mode === "initial" ? getInitials(input) : input;
+
+    const targetPure = cleanVerseMarker(resolvedTarget);
+    const inputPure = cleanVerseMarker(resolvedInput);
+
+    const targetNoSpace = targetPure.replace(/\s+/g, "");
+    const inputNoSpace = inputPure.replace(/\s+/g, "");
+
+    let matchLen = 0;
+    while (
+      matchLen < inputNoSpace.length &&
+      matchLen < targetNoSpace.length &&
+      inputNoSpace[matchLen] === targetNoSpace[matchLen]
+    ) {
+      matchLen++;
+    }
+
+    const markerRegex = /^(\s*\[?\d+장\s*\d+절\]?|\s*\[?\d+[:.]\d+\]?|\s*[:.]\d+|\s*\d+절|\s*\d+\.|\s*\d+)/;
+    const markerMatch = resolvedTarget.match(markerRegex);
+    const markerLength = markerMatch ? markerMatch[0].length : 0;
+
+    const elements: React.ReactNode[] = [];
+    let pureCharIndex = 0;
+
+    for (let i = 0; i < resolvedTarget.length; i++) {
+      const char = resolvedTarget[i];
+
+      if (i < markerLength) {
+        elements.push(
+          <span key={i} className={darkMode ? "text-zinc-400 font-medium" : "text-slate-500 font-medium"}>
+            {char}
+          </span>
+        );
+      } else if (/\s/.test(char)) {
+        const isPastMatch = pureCharIndex >= matchLen;
+        elements.push(
+          <span 
+            key={i} 
+            className={
+              isPastMatch 
+                ? "text-red-500/80 border-b border-red-500/35" 
+                : darkMode 
+                ? "text-zinc-300" 
+                : "text-slate-850"
+            }
+          >
+            {char}
+          </span>
+        );
+      } else {
+        const isCorrect = pureCharIndex < matchLen;
+        if (isCorrect) {
+          elements.push(
+            <span key={i} className={darkMode ? "text-zinc-300 font-medium" : "text-slate-800 font-medium"}>
+              {char}
+            </span>
+          );
+        } else {
+          elements.push(
+            <span 
+              key={i} 
+              className="text-red-500 font-extrabold border-b border-red-500/50 bg-red-500/5"
+            >
+              {char}
+            </span>
+          );
+        }
+        pureCharIndex++;
+      }
+    }
+
+    return (
+      <div className={`p-5 rounded-2xl border ${darkMode ? "bg-zinc-950/45 border-zinc-800/80" : "bg-red-50/20 border-red-100"} mt-4 space-y-3`}>
+        <div className="flex items-center gap-1.5 text-xs text-amber-500 font-bold justify-center">
+          ⚠️ 틀린 부분이 있습니다. (빨간 글씨가 정답입니다)
+        </div>
+        <div className="h-px bg-zinc-800/20 w-full my-2"></div>
+        <div className="leading-relaxed break-keep select-text text-sm sm:text-base tracking-wide">
+          {elements}
+        </div>
+      </div>
+    );
   };
 
   // --- Keyboard Shortcuts for Practice Tab ---
@@ -982,12 +1081,112 @@ export default function RevelationMemorizer() {
     localStorage.setItem("rev_history", JSON.stringify(mergedHistory));
   };
 
-  if (!isLoggedIn) {
+  if (authChecking) {
     return (
       <div className={`min-h-screen flex flex-col items-center justify-center transition-colors duration-300 font-sans p-4 ${darkMode ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-slate-900"}`}>
         <div className="text-center space-y-4">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500 mx-auto"></div>
-          <p className="text-sm font-bold text-zinc-400">데이터베이스 연결 및 진행상황 동기화 중...</p>
+          <p className="text-sm font-bold text-zinc-400">데이터베이스 및 로그인 정보 확인 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isLoggedIn) {
+    return (
+      <div className={`min-h-screen flex flex-col items-center justify-center transition-colors duration-300 font-sans p-4 ${darkMode ? "bg-zinc-950 text-zinc-100" : "bg-slate-50 text-slate-900"}`}>
+        <div className={`w-full max-w-md p-8 rounded-3xl border transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-xl"}`}>
+          <div className="text-center mb-6">
+            <h2 className="text-2xl font-black bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">계시록 완벽숙지</h2>
+            <p className="text-xs text-zinc-400 mt-2">
+              {isRegisterMode ? "새로운 계정을 생성하여 암송 데이터를 연동하세요" : "계정에 로그인하여 기기간 학습 진도를 실시간 동기화하세요"}
+            </p>
+          </div>
+
+          <form onSubmit={isRegisterMode ? handleRegister : handleLogin} className="space-y-4">
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-zinc-400">아이디</label>
+              <div className="relative">
+                <input
+                  type="text"
+                  placeholder="아이디를 입력하세요 (2글자 이상)"
+                  value={loginId}
+                  onChange={(e) => setLoginId(e.target.value)}
+                  disabled={syncLoading}
+                  className={`w-full pl-10 pr-4 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                />
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">👤</span>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="block text-xs font-bold text-zinc-400">비밀번호</label>
+              <div className="relative">
+                <input
+                  type={showPw ? "text" : "password"}
+                  placeholder="비밀번호를 입력하세요"
+                  value={loginPw}
+                  onChange={(e) => setLoginPw(e.target.value)}
+                  disabled={syncLoading}
+                  className={`w-full pl-10 pr-10 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                />
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">🔑</span>
+                <button
+                  type="button"
+                  onClick={() => setShowPw(!showPw)}
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-450 hover:text-zinc-250 focus:outline-none text-xs"
+                >
+                  {showPw ? "👀 숨기기" : "🙈 보기"}
+                </button>
+              </div>
+            </div>
+
+            {isRegisterMode && (
+              <div className="space-y-1 animate-fade-in">
+                <label className="block text-xs font-bold text-zinc-400">비밀번호 확인</label>
+                <div className="relative">
+                  <input
+                    type={showPwConfirm ? "text" : "password"}
+                    placeholder="비밀번호를 다시 입력하세요"
+                    value={loginPwConfirm}
+                    onChange={(e) => setLoginPwConfirm(e.target.value)}
+                    disabled={syncLoading}
+                    className={`w-full pl-10 pr-10 py-2.5 text-sm rounded-xl border outline-none transition-all duration-300 ${darkMode ? "bg-zinc-800 border-zinc-700 text-white focus:border-emerald-500" : "bg-slate-100 border-slate-200 text-slate-800 focus:border-emerald-500"}`}
+                  />
+                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400">🔒</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowPwConfirm(!showPwConfirm)}
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-zinc-450 hover:text-zinc-250 focus:outline-none text-xs"
+                  >
+                    {showPwConfirm ? "👀 숨기기" : "🙈 보기"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={syncLoading}
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-extrabold rounded-2xl transition-all shadow-md shadow-emerald-500/10 active:scale-95 disabled:opacity-50"
+            >
+              {syncLoading ? "처리 중..." : isRegisterMode ? "회원가입 완료" : "로그인"}
+            </button>
+          </form>
+
+          <button
+            onClick={() => {
+              setIsRegisterMode(!isRegisterMode);
+              setLoginId("");
+              setLoginPw("");
+              setLoginPwConfirm("");
+              setShowPw(false);
+              setShowPwConfirm(false);
+            }}
+            className="w-full text-center text-xs text-zinc-400 hover:text-zinc-200 underline mt-4 block"
+          >
+            {isRegisterMode ? "이미 계정이 있으신가요? 로그인하기" : "아직 계정이 없으신가요? 회원가입하기"}
+          </button>
         </div>
       </div>
     );
@@ -1064,8 +1263,20 @@ export default function RevelationMemorizer() {
             </button>
           </nav>
 
-          {/* Theme Switcher */}
+          {/* Theme Switcher and User Account Info */}
           <div className="flex items-center gap-3">
+            {isLoggedIn && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-zinc-400 font-bold hidden sm:inline">👤 {loggedInUser}</span>
+                <button
+                  onClick={handleLogout}
+                  className="px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-350 hover:text-zinc-200 rounded-xl border border-zinc-700 text-xs font-bold transition-colors"
+                  title="로그아웃"
+                >
+                  로그아웃
+                </button>
+              </div>
+            )}
             <button
               onClick={() => setDarkMode(!darkMode)}
               className={`p-2 rounded-lg transition-colors border ${darkMode ? "bg-zinc-800 hover:bg-zinc-750 border-zinc-700 text-yellow-400" : "bg-white hover:bg-slate-100 border-slate-200 text-slate-700"}`}
@@ -1580,6 +1791,10 @@ export default function RevelationMemorizer() {
                         허용된 입력 형식: 본문만 입력하거나, 앞에 `1.`, `1절`, `1:1`, `:1`을 함께 쳐도 모두 정답 처리됩니다.
                       </div>
                     </div>
+
+                    {dayTestAnswers[activeTestVerseIdx] !== "" && activeTestFeedback && !activeTestFeedback.isMatch && (
+                      renderDiffFeedback(dayTestAnswers[activeTestVerseIdx], activeTestVerse.text, dayTestMode)
+                    )}
                   </div>
 
                   {/* Peek Answer button */}
@@ -1831,6 +2046,10 @@ export default function RevelationMemorizer() {
                         </div>
                       </div>
 
+                      {feedback && !isCorrect && !feedback.isMatch && (
+                        renderDiffFeedback(answer, verse.text, keyVerseTestModeGlobal)
+                      )}
+
                       {/* Grading Submit Button */}
                       <button
                         onClick={() => {
@@ -1983,6 +2202,10 @@ export default function RevelationMemorizer() {
                     앞부분에 장/절 번호(예: `1.`, `1절`, `1:1`, `:1`)를 적거나 본문만 적어도 모두 통과됩니다.
                   </div>
                 </div>
+
+                {(chapterTestAnswers[activeChapterTestIdx] || "") !== "" && activeChapterTestFeedback && !activeChapterTestFeedback.isMatch && (
+                  renderDiffFeedback(chapterTestAnswers[activeChapterTestIdx] || "", activeChapterTestVerse.text, chapterTestMode)
+                )}
               </div>
 
               {/* Hints */}
