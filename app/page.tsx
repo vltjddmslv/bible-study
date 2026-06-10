@@ -48,6 +48,7 @@ export default function RevelationMemorizer() {
   const [activeChapterTestIdx, setActiveChapterTestIdx] = useState<number>(0);
   const [chapterTestMode, setChapterTestMode] = useState<"initial" | "full">("initial");
   const [showChapterTestAnswer, setShowChapterTestAnswer] = useState<boolean>(false);
+  const [isKeyVerseTestOnly, setIsKeyVerseTestOnly] = useState<boolean>(false);
 
   // --- Practice Tab States (Self Learning) ---
   const [practiceSubTab, setPracticeSubTab] = useState<"card" | "blank" | "typing">("card");
@@ -579,13 +580,20 @@ export default function RevelationMemorizer() {
   // --- Chapter Test Handlers ---
   const activeChapterTestVerses = useMemo(() => {
     if (activeChapterTest === null) return [];
-    return REVELATION_VERSES.filter((v) => v.chapter === activeChapterTest);
-  }, [activeChapterTest]);
+    return REVELATION_VERSES.filter((v) => 
+      v.chapter === activeChapterTest && 
+      (!isKeyVerseTestOnly || isKeyVerse(v.chapter, v.verse))
+    );
+  }, [activeChapterTest, isKeyVerseTestOnly]);
 
-  const handleStartChapterTest = (chapterNum: number) => {
+  const handleStartChapterTest = (chapterNum: number, keyVersesOnly: boolean = false) => {
+    setIsKeyVerseTestOnly(keyVersesOnly);
     setActiveChapterTest(chapterNum);
     setActiveChapterTestIdx(0);
-    const count = REVELATION_VERSES.filter((v) => v.chapter === chapterNum).length;
+    const count = REVELATION_VERSES.filter((v) => 
+      v.chapter === chapterNum && 
+      (!keyVersesOnly || isKeyVerse(chapterNum, v.verse))
+    ).length;
     setChapterTestAnswers(Array(count).fill(""));
     setChapterTestMode("initial");
     setShowChapterTestAnswer(false);
@@ -607,7 +615,11 @@ export default function RevelationMemorizer() {
     });
     saveProgress(newProgress);
 
-    alert(`🎉 요한계시록 ${activeChapterTest}장 전체 암송 시험을 합격하셨습니다! ${activeChapterTestVerses.length}개 전 구절이 '암기 완료(🟢)'로 등록되었습니다.`);
+    if (isKeyVerseTestOnly) {
+      alert(`🎉 요한계시록 ${activeChapterTest}장 핵심 주요 성구 시험을 합격하셨습니다! ${activeChapterTestVerses.length}개 주요 구절이 '암기 완료(🟢)'로 등록되었습니다.`);
+    } else {
+      alert(`🎉 요한계시록 ${activeChapterTest}장 전체 암송 시험을 합격하셨습니다! ${activeChapterTestVerses.length}개 전 구절이 '암기 완료(🟢)'로 등록되었습니다.`);
+    }
     setActiveChapterTest(null);
   };
 
@@ -1815,17 +1827,17 @@ export default function RevelationMemorizer() {
         )}
 
         {/* --- DEDICATED CHAPTER-BY-CHAPTER TEST WORKSPACE --- */}
-        {activeTab === "read" && activeChapterTest !== null && activeChapterTestVerse && (
+        {(activeTab === "read" || activeTab === "key-verses") && activeChapterTest !== null && activeChapterTestVerse && (
           <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
               <button
                 onClick={() => { setActiveChapterTest(null); stopTTS(); }}
                 className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-xs font-bold text-zinc-400 hover:text-zinc-200 transition-colors border border-zinc-800"
               >
-                ⬅️ 성경 학습으로 돌아가기
+                {isKeyVerseTestOnly ? "⬅️ 핵심성구 학습으로 돌아가기" : "⬅️ 성경 학습으로 돌아가기"}
               </button>
               <h3 className="text-lg font-black text-amber-500">
-                요한계시록 {activeChapterTest}장 전체 시험 (총 {activeChapterTestVerses.length}구절)
+                요한계시록 {activeChapterTest}장 {isKeyVerseTestOnly ? "핵심 주요성구 시험" : "전체 시험"} (총 {activeChapterTestVerses.length}구절)
               </h3>
             </div>
 
@@ -2139,7 +2151,7 @@ export default function RevelationMemorizer() {
         )}
 
         {/* --- TAB 3.5: KEY VERSES (핵심 주요 성구 학습) --- */}
-        {activeTab === "key-verses" && (
+        {activeTab === "key-verses" && activeChapterTest === null && (
           <div className="space-y-6 animate-fade-in">
             {/* Header info card */}
             <div className={`p-5 rounded-3xl border transition-colors duration-300 flex flex-col md:flex-row md:items-center justify-between gap-4 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
@@ -2248,6 +2260,24 @@ export default function RevelationMemorizer() {
 
                   return (
                     <div className="space-y-4">
+                      {/* Chapter Test Trigger for Key Verses */}
+                      <div className={`p-5 rounded-3xl border flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                        <div className="space-y-1">
+                          <span className="text-sm font-extrabold text-amber-400 block flex items-center gap-1.5">
+                            ✏️ 계시록 {keyVersesSelectedChapter}장 주요성구 시험보기
+                          </span>
+                          <span className="text-xs text-zinc-400 block leading-relaxed">
+                            이 장의 핵심 주요 성구 <b>{targetVerses.length}구절</b>만 대상으로 암송 쓰기 시험을 시작합니다.
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleStartChapterTest(keyVersesSelectedChapter, true)}
+                          className="px-4 py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:scale-105 active:scale-95 text-white rounded-2xl text-xs font-black shadow-md flex items-center justify-center gap-1.5 whitespace-nowrap transition-all"
+                        >
+                          주요성구 시험 시작
+                        </button>
+                      </div>
+
                       {targetVerses.map((v) => {
                         const key = `${v.chapter}:${v.verse}`;
                         const status = progress[key] || "unlearned";
