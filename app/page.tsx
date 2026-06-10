@@ -50,6 +50,14 @@ export default function RevelationMemorizer() {
   const [showChapterTestAnswer, setShowChapterTestAnswer] = useState<boolean>(false);
   const [isKeyVerseTestOnly, setIsKeyVerseTestOnly] = useState<boolean>(false);
 
+  // --- New Key Verse Test States ---
+  const [keyVerseAnswers, setKeyVerseAnswers] = useState<{ [key: string]: string }>({});
+  const [keyVerseScoreStatus, setKeyVerseScoreStatus] = useState<{ [key: string]: { isMatch: boolean; isComplete: boolean } | null }>({});
+  const [keyVerseStudyReveal, setKeyVerseStudyReveal] = useState<{ [key: string]: boolean }>({});
+  const [keyVerseTestModeGlobal, setKeyVerseTestModeGlobal] = useState<"full" | "initial">("full");
+  const [hideAllKeyVerseText, setHideAllKeyVerseText] = useState<boolean>(false);
+  const [individualReveal, setIndividualReveal] = useState<{ [key: string]: boolean }>({});
+
   // --- Practice Tab States (Self Learning) ---
   const [practiceSubTab, setPracticeSubTab] = useState<"card" | "blank" | "typing">("card");
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState<number>(0);
@@ -640,6 +648,9 @@ export default function RevelationMemorizer() {
   // --- Chapter Test Handlers ---
   const activeChapterTestVerses = useMemo(() => {
     if (activeChapterTest === null) return [];
+    if (activeChapterTest === -1) {
+      return REVELATION_VERSES.filter((v) => isKeyVerse(v.chapter, v.verse));
+    }
     return REVELATION_VERSES.filter((v) => 
       v.chapter === activeChapterTest && 
       (!isKeyVerseTestOnly || isKeyVerse(v.chapter, v.verse))
@@ -650,13 +661,27 @@ export default function RevelationMemorizer() {
     setIsKeyVerseTestOnly(keyVersesOnly);
     setActiveChapterTest(chapterNum);
     setActiveChapterTestIdx(0);
-    const count = REVELATION_VERSES.filter((v) => 
-      v.chapter === chapterNum && 
-      (!keyVersesOnly || isKeyVerse(chapterNum, v.verse))
-    ).length;
+    
+    let count = 0;
+    if (chapterNum === -1) {
+      count = REVELATION_VERSES.filter((v) => isKeyVerse(v.chapter, v.verse)).length;
+    } else {
+      count = REVELATION_VERSES.filter((v) => 
+        v.chapter === chapterNum && 
+        (!keyVersesOnly || isKeyVerse(chapterNum, v.verse))
+      ).length;
+    }
+    
     setChapterTestAnswers(Array(count).fill(""));
     setChapterTestMode("initial");
     setShowChapterTestAnswer(false);
+    
+    // Reset key verse test answers, grading status, and study views
+    setKeyVerseAnswers({});
+    setKeyVerseScoreStatus({});
+    setKeyVerseStudyReveal({});
+    setKeyVerseTestModeGlobal("full"); // Full typing comes first
+    
     stopTTS();
   };
 
@@ -1655,8 +1680,213 @@ export default function RevelationMemorizer() {
           </div>
         )}
 
+        {/* --- DEDICATED KEY VERSE BATCH TEST WORKSPACE (NEW) --- */}
+        {(activeTab === "read" || activeTab === "key-verses") && activeChapterTest !== null && isKeyVerseTestOnly && (
+          <div className="max-w-3xl mx-auto space-y-6 animate-fade-in p-4 sm:p-0">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-4 flex-wrap gap-2">
+              <button
+                onClick={() => { setActiveChapterTest(null); stopTTS(); }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-xs font-bold text-zinc-400 hover:text-zinc-200 transition-colors border border-zinc-800"
+              >
+                ⬅️ 핵심성구 학습으로 돌아가기
+              </button>
+              <h3 className="text-lg font-black text-amber-500">
+                {activeChapterTest === -1 
+                  ? "요한계시록 1~22장 전체 주요성구 시험" 
+                  : `요한계시록 ${activeChapterTest}장 주요성구 시험`} (총 {activeChapterTestVerses.length}구절)
+              </h3>
+            </div>
+
+            {/* Global Options */}
+            <div className={`p-4 rounded-2xl border flex items-center justify-between flex-wrap gap-3 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+              <span className="text-xs font-semibold text-zinc-400">📝 시험 모드 설정 (전체 문제 일괄 적용)</span>
+              <div className="flex bg-zinc-800 p-0.5 rounded-lg border border-zinc-700 text-xs">
+                <button
+                  onClick={() => setKeyVerseTestModeGlobal("full")}
+                  className={`px-3 py-1 rounded-md font-medium transition-all ${keyVerseTestModeGlobal === "full" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+                >
+                  전체 입력
+                </button>
+                <button
+                  onClick={() => setKeyVerseTestModeGlobal("initial")}
+                  className={`px-3 py-1 rounded-md font-medium transition-all ${keyVerseTestModeGlobal === "initial" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
+                >
+                  초성 매칭
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable list of verses */}
+            <div className="space-y-6">
+              {activeChapterTestVerses.map((verse, idx) => {
+                const key = `${verse.chapter}:${verse.verse}`;
+                const answer = keyVerseAnswers[key] || "";
+                const feedback = keyVerseScoreStatus[key] || null;
+                const showStudy = keyVerseStudyReveal[key] || false;
+                const isCorrect = feedback?.isComplete;
+
+                return (
+                  <div 
+                    key={key} 
+                    className={`p-5 rounded-3xl border transition-colors duration-300 ${
+                      darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"
+                    }`}
+                  >
+                    {/* Header line */}
+                    <div className="flex items-center justify-between border-b border-zinc-850 pb-3 mb-4 flex-wrap gap-2">
+                      <span className="text-base font-extrabold text-emerald-400">
+                        {idx + 1}. 계 {verse.chapter}장 {verse.verse}절
+                      </span>
+                      
+                      <div className="flex items-center gap-2">
+                        {/* Study button */}
+                        <button
+                          onClick={() => {
+                            setKeyVerseStudyReveal(prev => ({ ...prev, [key]: !prev[key] }));
+                          }}
+                          className="text-[11px] px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-lg flex items-center gap-1 font-bold border border-zinc-700/60"
+                        >
+                          📖 {showStudy ? "닫기" : "공부하기"}
+                        </button>
+                        
+                        {/* Speech input button */}
+                        <button
+                          onClick={() => {
+                            const el = document.getElementById(`textarea-${key}`);
+                            if (el) {
+                              (el as HTMLTextAreaElement).focus();
+                            }
+                            alert("💡 터치 후 스마트폰 키보드의 마이크 아이콘(🎙️)을 누르시면 편리하게 음성 입력을 이용할 수 있습니다.");
+                          }}
+                          className="text-[11px] px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 rounded-lg flex items-center gap-1 font-bold border border-zinc-700/60"
+                        >
+                          🎤 음성 입력
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Quick study text reveal if clicked */}
+                    {showStudy && (
+                      <div className="mb-4 p-3.5 rounded-xl bg-amber-500/5 border border-amber-500/15 text-sm text-amber-300 font-medium leading-relaxed">
+                        📖 <b className="text-amber-400">공부하기 본문:</b> {verse.text}
+                      </div>
+                    )}
+
+                    {/* Consonant Hint */}
+                    {keyVerseTestModeGlobal === "initial" && (
+                      <div className="mb-4 p-3.5 rounded-xl bg-zinc-850/60 border border-zinc-800/80">
+                        <span className="text-[10px] text-zinc-500 block mb-0.5">초성 힌트</span>
+                        <p className="text-sm font-bold tracking-widest text-emerald-300 leading-relaxed break-all">
+                          {getInitials(verse.text)}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Text Area */}
+                    <div className="space-y-4">
+                      <textarea
+                        id={`textarea-${key}`}
+                        placeholder={
+                          keyVerseTestModeGlobal === "initial"
+                            ? "초성을 보며 초성 혹은 한글로 입력해보세요..."
+                            : "암송한 성구를 입력하세요..."
+                        }
+                        value={answer}
+                        onChange={(e) => {
+                          setKeyVerseAnswers(prev => ({ ...prev, [key]: e.target.value }));
+                          if (keyVerseScoreStatus[key]) {
+                            setKeyVerseScoreStatus(prev => ({ ...prev, [key]: null }));
+                          }
+                        }}
+                        className={`w-full p-4 text-sm sm:text-base rounded-2xl border outline-none min-h-[100px] transition-all duration-350 ${
+                          answer === ""
+                            ? darkMode
+                              ? "bg-zinc-800 border-zinc-700 focus:border-zinc-650"
+                              : "bg-slate-50 border-slate-200"
+                            : isCorrect
+                            ? "bg-emerald-950/20 border-emerald-500 text-emerald-300 font-medium"
+                            : feedback
+                            ? "bg-rose-950/20 border-rose-600 text-rose-300"
+                            : darkMode
+                            ? "bg-zinc-800 border-zinc-700"
+                            : "bg-slate-50 border-slate-200"
+                        }`}
+                      />
+
+                      {/* Score Result Status */}
+                      <div className="flex justify-between items-center text-xs">
+                        <div>
+                          {feedback && (
+                            <span className="font-bold">
+                              {isCorrect ? (
+                                <span className="text-emerald-400">🎉 일치합니다! 암기완료로 등록되었습니다.</span>
+                              ) : (
+                                <span className="text-rose-500">❌ 오타가 있습니다. 다시 확인해보세요.</span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 text-right hidden sm:block">
+                          본문만 적어도 모두 통과됩니다.
+                        </div>
+                      </div>
+
+                      {/* Grading Submit Button */}
+                      <button
+                        onClick={() => {
+                          const feed = getTypingFeedback(answer, verse.text, keyVerseTestModeGlobal);
+                          setKeyVerseScoreStatus(prev => ({ ...prev, [key]: feed }));
+                          
+                          if (feed?.isComplete) {
+                            handleUpdateStatus(verse.chapter, verse.verse, "learned");
+                          }
+                        }}
+                        className={`w-full py-3 rounded-2xl text-white font-extrabold text-sm shadow-md transition-all ${
+                          isCorrect
+                            ? "bg-emerald-700 hover:bg-emerald-600 cursor-default"
+                            : "bg-emerald-600 hover:bg-emerald-500 hover:scale-[1.01] active:scale-95"
+                        }`}
+                      >
+                        {isCorrect ? "채점 완료 (일치)" : "정답 제출"}
+                      </button>
+                    </div>
+
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bottom Actions */}
+            <div className="flex justify-center pt-4">
+              <button
+                onClick={() => {
+                  let correctCount = 0;
+                  activeChapterTestVerses.forEach(v => {
+                    const key = `${v.chapter}:${v.verse}`;
+                    if (keyVerseScoreStatus[key]?.isComplete) {
+                      correctCount++;
+                    }
+                  });
+                  
+                  if (correctCount === activeChapterTestVerses.length) {
+                    alert(`🎉 축하합니다! 모든 성구(${correctCount}개)를 통과하셨습니다.`);
+                    setActiveChapterTest(null);
+                  } else {
+                    if (confirm(`현재 총 ${activeChapterTestVerses.length}구절 중 ${correctCount}구절을 통과하셨습니다. 시험을 중단하고 돌아가시겠습니까?`)) {
+                      setActiveChapterTest(null);
+                    }
+                  }
+                }}
+                className="px-8 py-3 bg-zinc-900 hover:bg-zinc-850 text-zinc-300 hover:text-zinc-150 border border-zinc-800 text-sm font-bold rounded-2xl transition-colors"
+              >
+                시험 종료 및 돌아가기
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* --- DEDICATED CHAPTER-BY-CHAPTER TEST WORKSPACE --- */}
-        {(activeTab === "read" || activeTab === "key-verses") && activeChapterTest !== null && activeChapterTestVerse && (
+        {(activeTab === "read" || activeTab === "key-verses") && activeChapterTest !== null && !isKeyVerseTestOnly && activeChapterTestVerse && (
           <div className="max-w-3xl mx-auto space-y-6 animate-fade-in">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
               <button
@@ -2021,6 +2251,12 @@ export default function RevelationMemorizer() {
               {/* Left panel: Chapter selection with indicators */}
               <div className={`lg:col-span-1 p-4 rounded-3xl border h-fit space-y-2 max-h-[75vh] overflow-y-auto custom-scrollbar ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200"}`}>
                 <span className="block text-xs font-bold text-zinc-400 mb-3 px-2">📖 장별 주요 성구 목록</span>
+                <button
+                  onClick={() => handleStartChapterTest(-1, true)}
+                  className="w-full mb-3 px-3.5 py-3 bg-gradient-to-r from-amber-600 to-amber-500 hover:scale-[1.02] active:scale-95 text-white rounded-2xl text-xs font-extrabold shadow-md flex items-center justify-center gap-1.5 transition-all"
+                >
+                  ⭐ 1~22장 전체 주요성구 시험
+                </button>
                 <div className="grid grid-cols-2 lg:grid-cols-1 gap-1.5">
                   {Array.from({ length: 22 }, (_, i) => {
                     const chNum = i + 1;
@@ -2099,68 +2335,85 @@ export default function RevelationMemorizer() {
                             이 장의 핵심 주요 성구 <b>{targetVerses.length}구절</b>만 대상으로 암송 쓰기 시험을 시작합니다.
                           </span>
                         </div>
-                        <button
-                          onClick={() => handleStartChapterTest(keyVersesSelectedChapter, true)}
-                          className="px-4 py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:scale-105 active:scale-95 text-white rounded-2xl text-xs font-black shadow-md flex items-center justify-center gap-1.5 whitespace-nowrap transition-all"
-                        >
-                          주요성구 시험 시작
-                        </button>
+                        <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+                          {/* Hide/Reveal toggle button */}
+                          <button
+                            onClick={() => {
+                              setHideAllKeyVerseText(prev => !prev);
+                              setIndividualReveal({}); // Reset individual reveals
+                            }}
+                            className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition-all border ${
+                              hideAllKeyVerseText
+                                ? "bg-zinc-800 border-zinc-700 text-amber-400 font-extrabold"
+                                : darkMode
+                                ? "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-300"
+                                : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                            }`}
+                          >
+                            {hideAllKeyVerseText ? "👁️ 전체 보이기" : "🙈 전체 가리기"}
+                          </button>
+                          <button
+                            onClick={() => handleStartChapterTest(keyVersesSelectedChapter, true)}
+                            className="px-4 py-2.5 bg-gradient-to-r from-amber-600 to-amber-500 hover:scale-105 active:scale-95 text-white rounded-2xl text-xs font-black shadow-md flex items-center justify-center gap-1.5 whitespace-nowrap transition-all"
+                          >
+                            주요성구 시험 시작
+                          </button>
+                        </div>
                       </div>
 
                       {targetVerses.map((v) => {
                         const key = `${v.chapter}:${v.verse}`;
                         const status = progress[key] || "unlearned";
-                        const isTtsActive = activeTtsVerse === key;
 
                         return (
                           <div
                             key={key}
                             className={`p-5 rounded-3xl border transition-all duration-300 flex flex-col gap-4 ${
-                              isTtsActive
-                                ? "bg-emerald-950/20 border-emerald-500"
-                                : darkMode
+                              darkMode
                                 ? "bg-zinc-900 border-zinc-800 hover:border-zinc-750"
                                 : "bg-white border-slate-200 hover:border-slate-300 shadow-sm"
                             }`}
                           >
-                            {/* Card Header: Reference and Controls */}
+                            {/* Card Header: Reference and Status Badge only */}
                             <div className="flex items-center justify-between border-b pb-3 border-zinc-800/20 flex-wrap gap-2">
                               <span className="text-sm font-extrabold text-emerald-400 flex items-center gap-1.5">
                                 ⭐ 요한계시록 {v.chapter}장 {v.verse}절
                               </span>
                               <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() => playTTS(v.text, key)}
-                                  className="text-xs px-2.5 py-1 bg-zinc-800 hover:bg-zinc-750 rounded text-zinc-300 flex items-center gap-1"
-                                >
-                                  🔊 {isTtsActive && isPlayingTTS ? "정지" : "듣기"}
-                                </button>
-                                <div className="flex bg-zinc-800 p-0.5 rounded-lg border border-zinc-700 text-[10px]">
-                                  {(["unlearned", "reviewing", "learned"] as const).map((s) => (
-                                    <button
-                                      key={s}
-                                      onClick={() => handleUpdateStatus(v.chapter, v.verse, s)}
-                                      className={`px-2 py-1 rounded transition-all ${
-                                        status === s
-                                          ? s === "learned"
-                                            ? "bg-emerald-600 text-white font-bold"
-                                            : s === "reviewing"
-                                            ? "bg-amber-600 text-white font-bold"
-                                            : "bg-rose-600 text-white font-bold"
-                                          : "text-zinc-500 hover:text-zinc-300"
-                                      }`}
-                                    >
-                                      {s === "learned" ? "암기완료" : s === "reviewing" ? "복습중" : "미학습"}
-                                    </button>
-                                  ))}
-                                </div>
+                                {status === "learned" ? (
+                                  <span className="text-[10px] px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-bold rounded-lg">
+                                    🟢 암기 완료
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 text-rose-400 font-bold rounded-lg">
+                                    🔴 미학습
+                                  </span>
+                                )}
                               </div>
                             </div>
 
-                            {/* Card Content: Text */}
-                            <p className="text-lg leading-relaxed break-keep font-medium select-text">
-                              {v.text}
-                            </p>
+                            {/* Card Content: Text with interactive blur hide masking */}
+                            <div 
+                              onClick={() => {
+                                if (hideAllKeyVerseText) {
+                                  setIndividualReveal(prev => ({ ...prev, [key]: !prev[key] }));
+                                }
+                              }}
+                              className={`p-1.5 rounded-xl transition-all ${
+                                hideAllKeyVerseText && !individualReveal[key]
+                                  ? "bg-zinc-950/40 text-transparent select-none blur-sm cursor-pointer hover:bg-zinc-950/20"
+                                  : "cursor-text"
+                              }`}
+                            >
+                              <p className="text-lg leading-relaxed break-keep font-medium select-text">
+                                {v.text}
+                              </p>
+                              {hideAllKeyVerseText && !individualReveal[key] && (
+                                <span className="block text-[10px] text-center text-zinc-400 font-bold mt-1.5 animate-pulse">
+                                  💡 터치하여 본문 가리기 해제
+                                </span>
+                              )}
+                            </div>
 
                             {/* Card Footer: Notes/Memos */}
                             <div className="pt-2">
