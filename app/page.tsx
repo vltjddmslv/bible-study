@@ -92,6 +92,7 @@ export default function RevelationMemorizer() {
   const [notes, setNotes] = useState<VerseNotes>({});
   const [studyHistory, setStudyHistory] = useState<StudyRecord[]>([]);
   const [studyPlan, setStudyPlan] = useState<StudyPlan | null>(null);
+  const [hardVerses, setHardVerses] = useState<{[key: string]: boolean}>({});
   const [setupStartDate, setSetupStartDate] = useState<string>("");
   const [setupEndDate, setSetupEndDate] = useState<string>("");
   const [setupExcWk, setSetupExcWk] = useState<boolean>(true);
@@ -150,7 +151,7 @@ export default function RevelationMemorizer() {
   const [practiceSubTab, setPracticeSubTab] = useState<"card" | "blank" | "typing">("card");
   const [currentPracticeIndex, setCurrentPracticeIndex] = useState<number>(0);
   const [isPracticeCardFlipped, setIsPracticeCardFlipped] = useState<boolean>(false);
-  const [practiceFilterStatus, setPracticeFilterStatus] = useState<"all" | ProgressStatus>("all");
+  const [practiceFilterStatus, setPracticeFilterStatus] = useState<"all" | "hard" | ProgressStatus>("all");
 
   // Blank Sub-State
   const [blankDifficulty, setBlankDifficulty] = useState<"easy" | "medium" | "hard">("medium");
@@ -180,6 +181,7 @@ export default function RevelationMemorizer() {
   const [ttsSpeed, setTtsSpeed] = useState<number>(1.0);
   const [activeTtsVerse, setActiveTtsVerse] = useState<string | null>(null);
   const [autoPlayTts, setAutoPlayTts] = useState<boolean>(false);
+  const [isPlayingChapterFull, setIsPlayingChapterFull] = useState<boolean>(false);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
@@ -246,12 +248,14 @@ export default function RevelationMemorizer() {
     const savedToken = localStorage.getItem("rev_token");
     const savedLastSyncTime = localStorage.getItem("rev_last_sync_time");
     const savedPlan = localStorage.getItem("rev_study_plan");
+    const savedHard = localStorage.getItem("rev_hard_verses");
 
     if (savedProgress) setProgress(JSON.parse(savedProgress));
     if (savedNotes) setNotes(JSON.parse(savedNotes));
     if (savedHistory) setStudyHistory(JSON.parse(savedHistory));
     if (savedCompletedDays) setCompletedDays(JSON.parse(savedCompletedDays));
     if (savedPlan) setStudyPlan(JSON.parse(savedPlan));
+    if (savedHard) setHardVerses(JSON.parse(savedHard));
 
     const todayStr = new Date().toISOString().split("T")[0];
     const targetDate = new Date();
@@ -327,11 +331,11 @@ export default function RevelationMemorizer() {
     if (!isLoggedIn || !loggedInUser || !sessionToken) return;
 
     const handler = setTimeout(() => {
-      triggerBackgroundUpload(progress, notes, studyHistory, completedDays, studyPlan);
+      triggerBackgroundUpload(progress, notes, studyHistory, completedDays, studyPlan, hardVerses);
     }, 1500); // 1.5s debounce
 
     return () => clearTimeout(handler);
-  }, [progress, notes, studyHistory, completedDays, studyPlan, isLoggedIn, loggedInUser, sessionToken]);
+  }, [progress, notes, studyHistory, completedDays, studyPlan, hardVerses, isLoggedIn, loggedInUser, sessionToken]);
 
   // Helper to save progress
   const saveProgress = (newProgress: VerseProgress) => {
@@ -466,6 +470,15 @@ export default function RevelationMemorizer() {
     }
   };
 
+  const handleToggleHardVerse = (chapter: number, verse: number) => {
+    const key = `${chapter}:${verse}`;
+    const newHard = { ...hardVerses };
+    newHard[key] = !newHard[key];
+    setHardVerses(newHard);
+    localStorage.setItem("rev_hard_verses", JSON.stringify(newHard));
+    triggerBackgroundUpload(progress, notes, studyHistory, completedDays, studyPlan, newHard);
+  };
+
   // --- Korean Initial Consonant Extractor (초성) ---
   const getInitials = (text: string): string => {
     const KOREAN_INITIALS = [
@@ -494,7 +507,14 @@ export default function RevelationMemorizer() {
       synthRef.current.cancel();
     }
 
-    const cleanText = text.replace(/\[\d+:\d+\]/g, "");
+    // Split text by space and join with comma for brief pauses between words (띄어쓰기 쉼 제공)
+    const cleanText = text
+      .replace(/\[\d+:\d+\]/g, "")
+      .replace(/[,.?!]/g, "")
+      .split(/\s+/)
+      .filter(Boolean)
+      .join(", ");
+
     const utterance = new SpeechSynthesisUtterance(cleanText);
     utterance.lang = "ko-KR";
     utterance.rate = ttsSpeed;
@@ -510,13 +530,28 @@ export default function RevelationMemorizer() {
       
       if (onEndCallback) {
         onEndCallback();
-      } else if (autoPlayTts && activeTab === "read") {
-        const currentIdx = filteredVerses.findIndex(v => `${v.chapter}:${v.verse}` === verseKey);
-        if (currentIdx >= 0 && currentIdx < filteredVerses.length - 1) {
-          const next = filteredVerses[currentIdx + 1];
-          setTimeout(() => {
-            playTTS(next.text, `${next.chapter}:${next.verse}`);
-          }, 100);
+      } else if (autoPlayTts) {
+        if (isPlayingChapterFull) {
+          const chapterVerses = selectedChapter === 0
+            ? REVELATION_VERSES
+            : REVELATION_VERSES.filter(v => v.chapter === selectedChapter);
+          const currentIdx = chapterVerses.findIndex(v => `${v.chapter}:${v.verse}` === verseKey);
+          if (currentIdx >= 0 && currentIdx < chapterVerses.length - 1) {
+            const next = chapterVerses[currentIdx + 1];
+            setTimeout(() => {
+              playTTS(next.text, `${next.chapter}:${next.verse}`);
+            }, 100);
+          } else {
+            setIsPlayingChapterFull(false);
+          }
+        } else if (activeTab === "read") {
+          const currentIdx = filteredVerses.findIndex(v => `${v.chapter}:${v.verse}` === verseKey);
+          if (currentIdx >= 0 && currentIdx < filteredVerses.length - 1) {
+            const next = filteredVerses[currentIdx + 1];
+            setTimeout(() => {
+              playTTS(next.text, `${next.chapter}:${next.verse}`);
+            }, 100);
+          }
         }
       }
     };
@@ -524,6 +559,7 @@ export default function RevelationMemorizer() {
     utterance.onerror = () => {
       setIsPlayingTTS(false);
       setActiveTtsVerse(null);
+      setIsPlayingChapterFull(false);
     };
 
     activeUtteranceRef.current = utterance;
@@ -535,6 +571,7 @@ export default function RevelationMemorizer() {
       synthRef.current.cancel();
       setIsPlayingTTS(false);
       setActiveTtsVerse(null);
+      setIsPlayingChapterFull(false);
     }
   };
 
@@ -547,7 +584,11 @@ export default function RevelationMemorizer() {
       const status = progress[key] || "unlearned";
 
       if (activeTab === "practice") {
-        if (practiceFilterStatus !== "all" && status !== practiceFilterStatus) return false;
+        if (practiceFilterStatus === "hard") {
+          if (!hardVerses[key]) return false;
+        } else if (practiceFilterStatus !== "all" && status !== practiceFilterStatus) {
+          return false;
+        }
       }
 
       if (searchQuery.trim() !== "") {
@@ -560,7 +601,7 @@ export default function RevelationMemorizer() {
 
       return true;
     });
-  }, [selectedChapter, practiceFilterStatus, searchQuery, progress, notes, activeTab]);
+  }, [selectedChapter, practiceFilterStatus, searchQuery, progress, notes, activeTab, hardVerses]);
 
   // Reset index when search/filter changes
   useEffect(() => {
@@ -591,8 +632,6 @@ export default function RevelationMemorizer() {
 
   // --- Regex-based Verse Marker Stripper & Typing Validator ---
   const getTypingFeedback = (input: string, originalText: string, mode: "initial" | "full") => {
-    const target = mode === "initial" ? getInitials(originalText) : originalText;
-    
     // Strips prefixes like "1.", "1절", "1:1", "[1:1]", ":1" from start of the typed string
     const cleanVerseMarker = (str: string): string => {
       return str
@@ -606,11 +645,16 @@ export default function RevelationMemorizer() {
     };
 
     const cleanedInput = cleanVerseMarker(input);
-    const cleanedTarget = cleanVerseMarker(target);
+    const cleanedTarget = cleanVerseMarker(originalText);
 
-    // Remove all spaces for spacing-independent check
-    const normalizedInput = cleanedInput.replace(/\s+/g, "");
-    const normalizedTarget = cleanedTarget.replace(/\s+/g, "");
+    // If initial mode, extract initials of the input so typing in Korean matches initials too!
+    const normalizedInput = (mode === "initial" ? getInitials(cleanedInput) : cleanedInput)
+      .replace(/\s+/g, "")
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+    
+    const normalizedTarget = (mode === "initial" ? getInitials(cleanedTarget) : cleanedTarget)
+      .replace(/\s+/g, "")
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
 
     if (normalizedInput === "") return null;
 
@@ -639,8 +683,8 @@ export default function RevelationMemorizer() {
     const targetPure = cleanVerseMarker(resolvedTarget);
     const inputPure = cleanVerseMarker(resolvedInput);
 
-    const targetNoSpace = targetPure.replace(/\s+/g, "");
-    const inputNoSpace = inputPure.replace(/\s+/g, "");
+    const targetNoSpace = targetPure.replace(/\s+/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+    const inputNoSpace = inputPure.replace(/\s+/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
 
     let matchLen = 0;
     while (
@@ -667,7 +711,7 @@ export default function RevelationMemorizer() {
             {char}
           </span>
         );
-      } else if (/\s/.test(char)) {
+      } else if (/[.,\/#!$%\^&\*;:{}=\-_`~()\s]/.test(char)) {
         const isPastMatch = pureCharIndex >= matchLen;
         elements.push(
           <span 
@@ -676,8 +720,8 @@ export default function RevelationMemorizer() {
               isPastMatch 
                 ? "text-red-500/80 border-b border-red-500/35" 
                 : darkMode 
-                ? "text-zinc-300" 
-                : "text-slate-850"
+                ? "text-zinc-400" 
+                : "text-slate-500"
             }
           >
             {char}
@@ -1190,7 +1234,9 @@ export default function RevelationMemorizer() {
           progress,
           notes,
           studyHistory,
-          completedDays
+          completedDays,
+          studyPlan,
+          hardVerses
         })
       });
       const data = await response.json();
@@ -1236,7 +1282,8 @@ export default function RevelationMemorizer() {
     currentNotes: VerseNotes,
     currentHistory: StudyRecord[],
     currentCompleted: { [key: number]: boolean },
-    currentPlan: StudyPlan | null
+    currentPlan: StudyPlan | null,
+    currentHard?: { [key: string]: boolean }
   ) => {
     const username = localStorage.getItem("rev_username");
     const token = localStorage.getItem("rev_token");
@@ -1252,7 +1299,8 @@ export default function RevelationMemorizer() {
           notes: currentNotes,
           studyHistory: currentHistory,
           completedDays: currentCompleted,
-          studyPlan: currentPlan
+          studyPlan: currentPlan,
+          hardVerses: currentHard !== undefined ? currentHard : hardVerses
         })
       });
       const nowStr = new Date().toLocaleString();
@@ -1279,15 +1327,29 @@ export default function RevelationMemorizer() {
       });
     }
 
-    // 2. Merge Completed Days (Union of completed days)
-    const mergedCompleted = { ...completedDays };
-    if (cloudData.completedDays) {
-      Object.keys(cloudData.completedDays).forEach((dayStr) => {
-        const day = parseInt(dayStr);
-        if (cloudData.completedDays[day]) {
-          mergedCompleted[day] = true;
+    // 5. Merge Study Plan & Completed Days (coupled logic)
+    let mergedPlan = studyPlan;
+    let mergedCompleted = { ...completedDays };
+    
+    if (cloudData.hasOwnProperty("studyPlan")) {
+      const serverPlanJson = cloudData.studyPlan ? JSON.stringify(cloudData.studyPlan) : null;
+      const localPlanJson = studyPlan ? JSON.stringify(studyPlan) : null;
+      
+      if (serverPlanJson !== localPlanJson) {
+        // If the study plan is different on the server, adopt the server plan and its completed days
+        mergedPlan = cloudData.studyPlan;
+        mergedCompleted = cloudData.completedDays || {};
+      } else {
+        // Same plan, so we can merge completed days as a union
+        if (cloudData.completedDays) {
+          Object.keys(cloudData.completedDays).forEach((dayStr) => {
+            const day = parseInt(dayStr);
+            if (cloudData.completedDays[day]) {
+              mergedCompleted[day] = true;
+            }
+          });
         }
-      });
+      }
     }
 
     // 3. Merge Notes (Keep longer note)
@@ -1315,10 +1377,10 @@ export default function RevelationMemorizer() {
       });
     }
 
-    // 5. Merge Study Plan (Overwrite with cloud version if present)
-    let mergedPlan = studyPlan;
-    if (cloudData.studyPlan) {
-      mergedPlan = cloudData.studyPlan;
+    // 6. Merge Hard Verses (overwrite/assign keys)
+    const mergedHard = { ...hardVerses };
+    if (cloudData.hardVerses) {
+      Object.assign(mergedHard, cloudData.hardVerses);
     }
 
     // Apply states
@@ -1327,12 +1389,14 @@ export default function RevelationMemorizer() {
     setNotes(mergedNotes);
     setStudyHistory(mergedHistory);
     setStudyPlan(mergedPlan);
+    setHardVerses(mergedHard);
 
     // Save to localStorage
     localStorage.setItem("rev_progress", JSON.stringify(mergedProgress));
     localStorage.setItem("rev_completed_days", JSON.stringify(mergedCompleted));
     localStorage.setItem("rev_notes", JSON.stringify(mergedNotes));
     localStorage.setItem("rev_history", JSON.stringify(mergedHistory));
+    localStorage.setItem("rev_hard_verses", JSON.stringify(mergedHard));
     if (mergedPlan) {
       localStorage.setItem("rev_study_plan", JSON.stringify(mergedPlan));
     } else {
@@ -1484,39 +1548,39 @@ export default function RevelationMemorizer() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">계시록 완벽숙지</h1>
-              <p className="text-xs text-zinc-400">성경 공부 및 암송 시험 점검 최적화 프로그램</p>
+              <p className={`text-xs ${darkMode ? "text-zinc-450" : "text-slate-500"}`}>성경 공부 및 암송 시험 점검 최적화 프로그램</p>
             </div>
           </div>
 
           {/* Navigation Tabs */}
-          <nav className="flex bg-zinc-800/50 p-1 rounded-lg border border-zinc-700/50 text-xs sm:text-sm">
+          <nav className={`flex p-1 rounded-lg border text-xs sm:text-sm ${darkMode ? "bg-zinc-800/50 border-zinc-700/50" : "bg-slate-100 border-slate-200"}`}>
             <button
               onClick={() => { setActiveTab("dashboard"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "dashboard" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "dashboard" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : (darkMode ? "text-zinc-400 hover:text-zinc-200" : "text-slate-600 hover:text-slate-900")}`}
             >
               대시보드
             </button>
             <button
               onClick={() => { setActiveTab("planner"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "planner" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "planner" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : (darkMode ? "text-zinc-400 hover:text-zinc-200" : "text-slate-600 hover:text-slate-900")}`}
             >
               일일 플래너
             </button>
             <button
               onClick={() => { setActiveTab("read"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "read" && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "read" && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : (darkMode ? "text-zinc-400 hover:text-zinc-200" : "text-slate-600 hover:text-slate-900")}`}
             >
               성경 학습 (1~22장)
             </button>
             <button
               onClick={() => { setActiveTab("key-verses"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "key-verses" && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "key-verses" && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : (darkMode ? "text-zinc-400 hover:text-zinc-200" : "text-slate-600 hover:text-slate-900")}`}
             >
               핵심 주요 성구
             </button>
             <button
               onClick={() => { setActiveTab("practice"); setActiveDay(null); setActiveChapterTest(null); stopTTS(); }}
-              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "practice" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`px-3 py-1.5 rounded-md font-medium transition-all duration-200 ${activeTab === "practice" && activeDay === null && activeChapterTest === null ? "bg-emerald-600 text-white shadow-sm" : (darkMode ? "text-zinc-400 hover:text-zinc-200" : "text-slate-600 hover:text-slate-900")}`}
             >
               개별 훈련
             </button>
@@ -1578,13 +1642,14 @@ export default function RevelationMemorizer() {
 
                 {activeTab === "practice" && (
                   <div>
-                    <label className="block text-xs font-semibold text-zinc-400 mb-1">훈련 상태 필터</label>
+                    <label className={`block text-xs font-semibold mb-1 ${darkMode ? "text-zinc-400" : "text-slate-500"}`}>훈련 상태 필터</label>
                     <select
                       value={practiceFilterStatus}
                       onChange={(e) => setPracticeFilterStatus(e.target.value as any)}
                       className={`px-3 py-2 rounded-xl border font-medium outline-none text-sm ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-100 border-slate-200 text-slate-800"}`}
                     >
                       <option value="all">전체 구절</option>
+                      <option value="hard">📌 어려운 구절만 모아보기</option>
                       <option value="unlearned">🔴 미학습</option>
                       <option value="reviewing">🟡 복습 중</option>
                       <option value="learned">🟢 암기 완료</option>
@@ -2077,6 +2142,17 @@ export default function RevelationMemorizer() {
                               )}
                             </span>
                             <div className="flex gap-2">
+                              <button
+                                onClick={() => handleToggleHardVerse(verse.chapter, verse.verse)}
+                                className={`text-xs px-2.5 py-1 rounded transition-all flex items-center gap-1 ${
+                                  hardVerses[`${verse.chapter}:${verse.verse}`]
+                                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                                    : "bg-zinc-805 text-zinc-400 hover:text-zinc-200"
+                                }`}
+                                title={hardVerses[`${verse.chapter}:${verse.verse}`] ? "어려운 구절에서 해제" : "잘 안 외워지는 어려운 구절로 지정"}
+                              >
+                                {hardVerses[`${verse.chapter}:${verse.verse}`] ? "📌 어려운 구절" : "📌 지정"}
+                              </button>
                               <button
                                 onClick={() => {
                                   const updated = [...revealStudyText];
@@ -2712,6 +2788,23 @@ export default function RevelationMemorizer() {
         {activeTab === "read" && activeChapterTest === null && (
           <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
             
+            {/* 개별공부 활용 안내 배너 */}
+            <div className={`p-5 rounded-3xl border transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800 text-zinc-200" : "bg-emerald-50/20 border-emerald-100/60 text-slate-800"}`}>
+              <div className="flex items-start gap-4">
+                <div className="p-2.5 rounded-2xl bg-emerald-600/10 text-emerald-500 text-xl">
+                  📖
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-emerald-500 mb-1">성경 개별 학습 (1~22장) 활용 가이드</h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    이 탭은 요한계시록을 장별로 자유롭게 읽고 공부하는 공간입니다. 특정 장을 선택하여 집중 정독할 수 있으며, 
+                    각 구절 옆의 스피커(🔊) 아이콘을 눌러 음성을 듣거나 신호등(🟢/🟡/🔴) 버튼을 눌러 개별 암송 진도를 표시할 수 있습니다. 
+                    특히, 잘 외워지지 않는 구절은 <b>📌 버튼</b>을 탭하여 어려운 구절 목록에 추가한 뒤 개별 훈련 탭에서 모아 공부할 수 있습니다.
+                  </p>
+                </div>
+              </div>
+            </div>
+
             {/* Audio controllers toolbar */}
             <div className={`p-4 rounded-2xl border flex flex-wrap items-center justify-between gap-4 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
               <div className="flex items-center gap-3">
@@ -2724,17 +2817,39 @@ export default function RevelationMemorizer() {
                     ⏹️ 낭독 중단
                   </button>
                 ) : (
-                  <button
-                    onClick={() => {
-                      if (filteredVerses.length > 0) {
-                        const first = filteredVerses[0];
-                        playTTS(first.text, `${first.chapter}:${first.verse}`);
-                      }
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-colors"
-                  >
-                    ▶️ 연속 낭독 시작
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        if (filteredVerses.length > 0) {
+                          setAutoPlayTts(true);
+                          setIsPlayingChapterFull(false);
+                          const first = filteredVerses[0];
+                          playTTS(first.text, `${first.chapter}:${first.verse}`);
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-colors"
+                      title="현재 필터링되어 보여지는 구절들을 연속으로 낭독합니다."
+                    >
+                      ▶️ 목록 연속 낭독
+                    </button>
+                    <button
+                      onClick={() => {
+                        const chapterVerses = selectedChapter === 0
+                          ? REVELATION_VERSES
+                          : REVELATION_VERSES.filter(v => v.chapter === selectedChapter);
+                        if (chapterVerses.length > 0) {
+                          setAutoPlayTts(true);
+                          setIsPlayingChapterFull(true);
+                          const first = chapterVerses[0];
+                          playTTS(first.text, `${first.chapter}:${first.verse}`);
+                        }
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-bold transition-colors"
+                      title="검색 필터와 무관하게 선택된 장의 전체 구절을 1절부터 연속으로 낭독합니다."
+                    >
+                      📖 {selectedChapter === 0 ? "전체" : `${selectedChapter}장`} 전체 낭독
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -2815,27 +2930,36 @@ export default function RevelationMemorizer() {
                             {isKeyVerse(v.chapter, v.verse) && <span className="text-[11px]" title="핵심 주요 성구">⭐</span>}
                             {v.chapter}:{v.verse}
                           </span>
-                          <button
-                            onClick={() => {
-                              const nextStatusMap: { [key in ProgressStatus]: ProgressStatus } = {
-                                unlearned: "reviewing",
-                                reviewing: "learned",
-                                learned: "unlearned"
-                              };
-                              handleUpdateStatus(v.chapter, v.verse, nextStatusMap[status]);
-                            }}
-                            className="p-1 rounded text-xs"
-                            title="상태 전환"
-                          >
-                            {status === "learned" ? "🟢" : status === "reviewing" ? "🟡" : "🔴"}
-                          </button>
-                          <button
-                            onClick={() => playTTS(v.text, key)}
-                            className="p-1 rounded hover:bg-zinc-700/50 transition-opacity text-xs"
-                            title="구절 읽기"
-                          >
-                            🔊
-                          </button>
+                          <div className="flex md:flex-col items-center gap-1.5">
+                            <button
+                              onClick={() => {
+                                const nextStatusMap: { [key in ProgressStatus]: ProgressStatus } = {
+                                  unlearned: "reviewing",
+                                  reviewing: "learned",
+                                  learned: "unlearned"
+                                };
+                                handleUpdateStatus(v.chapter, v.verse, nextStatusMap[status]);
+                              }}
+                              className="p-1 rounded text-xs hover:scale-110 transition-transform"
+                              title="상태 전환"
+                            >
+                              {status === "learned" ? "🟢" : status === "reviewing" ? "🟡" : "🔴"}
+                            </button>
+                            <button
+                              onClick={() => handleToggleHardVerse(v.chapter, v.verse)}
+                              className={`p-1 rounded text-xs transition-transform hover:scale-110 ${hardVerses[key] ? "opacity-100 filter drop-shadow" : "opacity-30 hover:opacity-75"}`}
+                              title={hardVerses[key] ? "어려운 구절에서 해제" : "잘 안 외워지는 어려운 구절로 지정"}
+                            >
+                              📌
+                            </button>
+                            <button
+                              onClick={() => playTTS(v.text, key)}
+                              className="p-1 rounded hover:bg-zinc-700/50 transition-transform text-xs hover:scale-110"
+                              title="구절 읽기"
+                            >
+                              🔊
+                            </button>
+                          </div>
                         </div>
 
                         {/* Text Content side */}
@@ -3092,314 +3216,434 @@ export default function RevelationMemorizer() {
         )}
 
         {/* --- TAB 4: PRACTICE (개별 훈련소) --- */}
-        {activeTab === "practice" && currentPracticeVerse && (
+        {activeTab === "practice" && (
           <div className="max-w-2xl mx-auto space-y-6 animate-fade-in">
-            
-            {/* Sub-tab selection */}
-            <div className="grid grid-cols-3 bg-zinc-900 p-1 rounded-2xl border border-zinc-800 text-sm font-semibold">
-              <button
-                onClick={() => setPracticeSubTab("card")}
-                className={`py-2 rounded-xl transition-all ${practiceSubTab === "card" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
-              >
-                플래시카드 훈련
-              </button>
-              <button
-                onClick={() => setPracticeSubTab("blank")}
-                className={`py-2 rounded-xl transition-all ${practiceSubTab === "blank" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
-              >
-                빈칸 채우기 훈련
-              </button>
-              <button
-                onClick={() => setPracticeSubTab("typing")}
-                className={`py-2 rounded-xl transition-all ${practiceSubTab === "typing" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
-              >
-                타이핑 테스트 훈련
-              </button>
+            {/* 개별훈련 활용 안내 배너 */}
+            <div className={`p-5 rounded-3xl border transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800 text-zinc-200" : "bg-emerald-50/20 border-emerald-100/60 text-slate-800"}`}>
+              <div className="flex items-start gap-4">
+                <div className="p-2.5 rounded-2xl bg-emerald-600/10 text-emerald-500 text-xl">
+                  🏋️
+                </div>
+                <div>
+                  <h3 className="text-sm font-extrabold text-emerald-500 mb-1">개인 맞춤형 성경 훈련소 활용 가이드</h3>
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    이곳은 개별적으로 요한계시록을 복습하고 암송을 점검하는 훈련 공간입니다.<br />
+                    <b>플래시카드, 빈칸 채우기, 타이핑 테스트</b>의 세 가지 맞춤 모드를 제공하며, 
+                    학습 중 <b>📌 버튼</b>으로 등록해 둔 <b>'어려운 구절만 모아보기'</b> 필터를 적용하여 집중 학습과 자가 점검을 수행할 수 있습니다.
+                  </p>
+                </div>
+              </div>
             </div>
 
-            {/* --- SUB-TAB A: FLASHCARD --- */}
-            {practiceSubTab === "card" && (
-              <div className="space-y-6">
-                <div className="perspective-1000 w-full min-h-[260px] cursor-pointer" onClick={() => setIsPracticeCardFlipped(!isPracticeCardFlipped)}>
-                  <div className={`relative w-full h-full min-h-[260px] duration-500 preserve-3d ${isPracticeCardFlipped ? "rotate-y-180" : ""}`}>
-                    
-                    {/* Front */}
-                    <div className={`absolute inset-0 w-full h-full p-8 rounded-3xl border flex flex-col justify-between backface-hidden transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800 hover:border-zinc-750" : "bg-white border-slate-200 hover:border-slate-300 shadow-lg"}`}>
-                      <div className="flex justify-between items-center">
-                        <span className="px-3 py-1 text-xs rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold flex items-center gap-1">
-                          요한계시록
-                          {isKeyVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse) && (
-                            <span className="text-amber-400 font-bold" title="핵심 주요 성구">★ 핵심</span>
-                          )}
-                        </span>
-                        <span className="text-xs text-zinc-400">클릭하여 뒤집기</span>
-                      </div>
-                      <div className="text-center my-auto py-6">
-                        <h2 className="text-4xl font-extrabold tracking-tight flex items-center justify-center gap-2">
-                          {currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절
-                          {isKeyVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse) && (
-                            <span className="text-2xl text-amber-400" title="핵심 주요 성구">⭐</span>
-                          )}
-                        </h2>
-                      </div>
-                      <div className="flex justify-between items-center text-xs text-zinc-400">
-                        <span>번호: {currentPracticeIndex + 1} / {filteredVerses.length}</span>
-                        <span>
-                          상태: {progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "learned" ? "🟢 암기완료" : progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "reviewing" ? "🟡 복습중" : "🔴 미학습"}
-                        </span>
-                      </div>
-                    </div>
+            {filteredVerses.length === 0 ? (
+              <div className={`p-12 text-center rounded-3xl border transition-colors duration-300 flex flex-col items-center justify-center gap-4 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                <span className="text-4xl">📌</span>
+                <h3 className={`text-lg font-bold ${darkMode ? "text-zinc-300" : "text-slate-700"}`}>표시할 훈련 구절이 없습니다</h3>
+                <p className="text-sm text-zinc-400 max-w-md leading-relaxed break-keep">
+                  {practiceFilterStatus === "hard" 
+                    ? "어려운 구절(📌)로 지정된 구절이 없습니다. '성경 학습' 탭이나 '일일 플래너' 화면의 구절 왼쪽에서 📌 버튼을 탭하여 나만의 오답노트를 만들어 보세요!"
+                    : "선택하신 필터 조건 및 검색어와 일치하는 구절이 없습니다. 장 선택이나 상태 필터, 검색어를 다시 확인해 주세요."}
+                </p>
+              </div>
+            ) : currentPracticeVerse && (
+              <>
+                {/* Sub-tab selection */}
+                <div className={`grid grid-cols-3 p-1 rounded-2xl border text-sm font-semibold transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-slate-100 border-slate-200"}`}>
+                  <button
+                    onClick={() => {
+                      setPracticeSubTab("card");
+                      setIsPracticeCardFlipped(false);
+                      setPracticeUserInput("");
+                      setShowPracticeAnswer(false);
+                      setRevealedBlanks([]);
+                      stopTTS();
+                    }}
+                    className={`py-2 rounded-xl transition-all ${practiceSubTab === "card" ? "bg-emerald-600 text-white shadow-sm" : darkMode ? "text-zinc-400 hover:text-zinc-300" : "text-slate-600 hover:text-slate-800"}`}
+                  >
+                    플래시카드 훈련
+                  </button>
+                  <button
+                    onClick={() => {
+                      setPracticeSubTab("blank");
+                      setIsPracticeCardFlipped(false);
+                      setPracticeUserInput("");
+                      setShowPracticeAnswer(false);
+                      setRevealedBlanks([]);
+                      stopTTS();
+                    }}
+                    className={`py-2 rounded-xl transition-all ${practiceSubTab === "blank" ? "bg-emerald-600 text-white shadow-sm" : darkMode ? "text-zinc-400 hover:text-zinc-300" : "text-slate-600 hover:text-slate-800"}`}
+                  >
+                    빈칸 채우기 훈련
+                  </button>
+                  <button
+                    onClick={() => {
+                      setPracticeSubTab("typing");
+                      setIsPracticeCardFlipped(false);
+                      setPracticeUserInput("");
+                      setShowPracticeAnswer(false);
+                      setRevealedBlanks([]);
+                      stopTTS();
+                    }}
+                    className={`py-2 rounded-xl transition-all ${practiceSubTab === "typing" ? "bg-emerald-600 text-white shadow-sm" : darkMode ? "text-zinc-400 hover:text-zinc-300" : "text-slate-600 hover:text-slate-800"}`}
+                  >
+                    타이핑 테스트 훈련
+                  </button>
+                </div>
 
-                    {/* Back */}
-                    <div className={`absolute inset-0 w-full h-full p-8 rounded-3xl border flex flex-col justify-between rotate-y-180 backface-hidden transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-lg"}`}>
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-bold text-emerald-400 flex items-center gap-1.5">
-                          {currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절
-                          {isKeyVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse) && (
-                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] font-bold rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 select-none">
-                              ★ 핵심 주요 성구
+                {/* --- SUB-TAB A: FLASHCARD --- */}
+                {practiceSubTab === "card" && (
+                  <div className="space-y-6">
+                    <div className="perspective-1000 w-full min-h-[260px] cursor-pointer" onClick={() => setIsPracticeCardFlipped(!isPracticeCardFlipped)}>
+                      <div className={`relative w-full h-full min-h-[260px] duration-500 preserve-3d ${isPracticeCardFlipped ? "rotate-y-180" : ""}`}>
+                        
+                        {/* Front */}
+                        <div className={`absolute inset-0 w-full h-full p-8 rounded-3xl border flex flex-col justify-between backface-hidden transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800 hover:border-zinc-750" : "bg-white border-slate-200 hover:border-slate-300 shadow-lg"}`}>
+                          <div className="flex justify-between items-center">
+                            <span className="px-3 py-1 text-xs rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold flex items-center gap-1">
+                              요한계시록
+                              {isKeyVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse) && (
+                                <span className="text-amber-400 font-bold" title="핵심 주요 성구">★ 핵심</span>
+                              )}
                             </span>
-                          )}
-                        </span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            playTTS(currentPracticeVerse.text, `${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`);
-                          }}
-                          className="p-1 rounded bg-zinc-800 text-xs text-zinc-400 hover:text-zinc-200"
-                        >
-                          🔊 듣기
-                        </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleHardVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse);
+                                }}
+                                className={`p-1 rounded text-xs transition-transform hover:scale-110 ${hardVerses[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "opacity-100 filter drop-shadow" : "opacity-30 hover:opacity-75"}`}
+                                title={hardVerses[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "어려운 구절에서 해제" : "잘 안 외워지는 어려운 구절로 지정"}
+                              >
+                                📌
+                              </button>
+                              <span className="text-xs text-zinc-400">클릭하여 뒤집기</span>
+                            </div>
+                          </div>
+                          <div className="text-center my-auto py-6">
+                            <h2 className="text-4xl font-extrabold tracking-tight flex items-center justify-center gap-2">
+                              {currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절
+                              {isKeyVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse) && (
+                                <span className="text-2xl text-amber-400" title="핵심 주요 성구">⭐</span>
+                              )}
+                            </h2>
+                          </div>
+                          <div className="flex justify-between items-center text-xs text-zinc-400">
+                            <span>번호: {currentPracticeIndex + 1} / {filteredVerses.length}</span>
+                            <span>
+                              상태: {progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "learned" ? "🟢 암기완료" : progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "reviewing" ? "🟡 복습중" : "🔴 미학습"}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Back */}
+                        <div className={`absolute inset-0 w-full h-full p-8 rounded-3xl border flex flex-col justify-between rotate-y-180 backface-hidden transition-all duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-lg"}`}>
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm font-bold text-emerald-400 flex items-center gap-1.5">
+                              {currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절
+                              {isKeyVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse) && (
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] font-bold rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 select-none">
+                                  ★ 핵심 주요 성구
+                                </span>
+                              )}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleHardVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse);
+                                }}
+                                className={`p-1 rounded text-xs transition-transform hover:scale-110 ${hardVerses[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "opacity-100 filter drop-shadow" : "opacity-30 hover:opacity-75"}`}
+                                title={hardVerses[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "어려운 구절에서 해제" : "잘 안 외워지는 어려운 구절로 지정"}
+                              >
+                                📌
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  playTTS(currentPracticeVerse.text, `${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`);
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${darkMode ? "bg-zinc-800 text-zinc-300 hover:text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                              >
+                                🔊 듣기
+                              </button>
+                            </div>
+                          </div>
+                          <div className="my-auto py-2">
+                            <p className="text-lg sm:text-xl leading-relaxed font-semibold text-center break-keep tracking-wide">{currentPracticeVerse.text}</p>
+                          </div>
+                          <div className="text-right text-xs text-zinc-500 font-medium">클릭하여 다시 가리기</div>
+                        </div>
+
                       </div>
-                      <div className="my-auto py-2">
-                        <p className="text-lg sm:text-xl leading-relaxed font-semibold text-center break-keep tracking-wide">{currentPracticeVerse.text}</p>
-                      </div>
-                      <div className="text-right text-xs text-zinc-500">클릭하여 다시 가리기</div>
                     </div>
 
-                  </div>
-                </div>
-
-                {/* Tag status */}
-                <div className="grid grid-cols-3 gap-3">
-                  <button
-                    onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "unlearned")}
-                    className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "unlearned" || !progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "bg-rose-600 border-rose-500 text-white" : "bg-zinc-900 text-rose-500"}`}
-                  >
-                    🔴 미학습
-                  </button>
-                  <button
-                    onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "reviewing")}
-                    className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "reviewing" ? "bg-amber-600 border-amber-500 text-white" : "bg-zinc-900 text-amber-500"}`}
-                  >
-                    🟡 복습 중
-                  </button>
-                  <button
-                    onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "learned")}
-                    className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "learned" ? "bg-emerald-600 border-emerald-500 text-white" : "bg-zinc-900 text-emerald-500"}`}
-                  >
-                    🟢 암기 완료
-                  </button>
-                </div>
-                {/* Keyboard Shortcuts Guide */}
-                <div className="hidden md:flex justify-center items-center gap-x-4 gap-y-1 flex-wrap text-[10px] text-zinc-500 bg-zinc-900/30 p-2.5 rounded-xl border border-zinc-800/40 mt-3 select-none">
-                  <span>⌨️ <b>단축키</b></span>
-                  <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700">Space</kbd> 뒤집기</span>
-                  <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700">←</kbd> / <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700">→</kbd> 이동</span>
-                  <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700">L</kbd> 암기완료</span>
-                  <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700">R</kbd> 복습중</span>
-                  <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700">U</kbd> 미학습</span>
-                  <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700">S</kbd> 오디오 재생/정지</span>
-                </div>
-              </div>
-            )}
-
-            {/* --- SUB-TAB B: BLANKS --- */}
-            {practiceSubTab === "blank" && (
-              <div className="space-y-6">
-                <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-                  <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-                    <h3 className="text-base font-bold text-emerald-400">{currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절</h3>
-                    <div className="flex bg-zinc-850 p-0.5 rounded-lg border border-zinc-700 text-xs">
-                      {(["easy", "medium", "hard"] as const).map((diff) => (
-                        <button
-                          key={diff}
-                          onClick={() => { setBlankDifficulty(diff); setRevealedBlanks([]); }}
-                          className={`px-2.5 py-1 rounded-md font-medium transition-all ${blankDifficulty === diff ? "bg-emerald-600 text-white" : "text-zinc-400"}`}
-                        >
-                          {diff === "easy" ? "쉬움" : diff === "medium" ? "보통" : "어려움"}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="text-lg sm:text-xl leading-loose font-semibold text-center py-6 select-none flex flex-wrap gap-x-2 gap-y-3 justify-center">
-                    {blankedPracticeWords.map((word, idx) => {
-                      const isRevealed = revealedBlanks.includes(idx);
-                      if (word.isMasked && !isRevealed) {
-                        return (
-                          <span
-                            key={idx}
-                            onClick={() => setRevealedBlanks([...revealedBlanks, idx])}
-                            className="px-3 bg-zinc-800 hover:bg-zinc-700 text-transparent border-b-2 border-emerald-500 rounded cursor-pointer transition-colors"
-                          >
-                            {word.text.replace(/./g, "?")}
-                          </span>
-                        );
-                      }
-                      return (
-                        <span
-                          key={idx}
-                          onClick={() => { if (word.isMasked) setRevealedBlanks(revealedBlanks.filter(i => i !== idx)); }}
-                          className={`transition-all ${word.isMasked ? "text-emerald-400 border-b-2 border-dashed border-emerald-400/50" : ""}`}
-                        >
-                          {word.text}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="flex justify-between gap-3">
-                  <button onClick={() => setRevealedBlanks([])} className="px-3 py-1.5 border border-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs rounded-xl">
-                    🔄 다시 가리기
-                  </button>
-                  <button onClick={() => setRevealedBlanks(Array.from({ length: blankedPracticeWords.length }, (_, i) => i))} className="px-3 py-1.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-300 text-xs rounded-xl">
-                    👁️ 전체 정답 보기
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* --- SUB-TAB C: TYPING TEST --- */}
-            {practiceSubTab === "typing" && (
-              <div className="space-y-6">
-                <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-                  <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-                    <h3 className="text-base font-bold text-emerald-400">{currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절</h3>
-                    <div className="flex bg-zinc-805 p-0.5 rounded-lg border border-zinc-700 text-[10px]">
-                      <button onClick={() => { setTypingMode("initial"); setPracticeUserInput(""); }} className={`px-2.5 py-1 rounded transition-all ${typingMode === "initial" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}>
-                        초성 모드
+                    {/* Tag status */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <button
+                        onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "unlearned")}
+                        className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                          progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "unlearned" || !progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`]
+                            ? "bg-rose-600 border-rose-500 text-white"
+                            : darkMode
+                            ? "bg-zinc-900 border-zinc-800 text-rose-500 hover:bg-zinc-800"
+                            : "bg-white border-slate-200 text-rose-650 hover:bg-slate-50"
+                        }`}
+                      >
+                        🔴 미학습
                       </button>
-                      <button onClick={() => { setTypingMode("full"); setPracticeUserInput(""); }} className={`px-2.5 py-1 rounded transition-all ${typingMode === "full" ? "bg-emerald-600 text-white" : "text-zinc-400"}`}>
-                        전체 모드
+                      <button
+                        onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "reviewing")}
+                        className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                          progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "reviewing"
+                            ? "bg-amber-600 border-amber-500 text-white"
+                            : darkMode
+                            ? "bg-zinc-900 border-zinc-800 text-amber-500 hover:bg-zinc-800"
+                            : "bg-white border-slate-200 text-amber-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        🟡 복습 중
+                      </button>
+                      <button
+                        onClick={() => handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "learned")}
+                        className={`py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                          progress[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] === "learned"
+                            ? "bg-emerald-600 border-emerald-500 text-white"
+                            : darkMode
+                            ? "bg-zinc-900 border-zinc-800 text-emerald-500 hover:bg-zinc-800"
+                            : "bg-white border-slate-200 text-emerald-650 hover:bg-slate-50"
+                        }`}
+                      >
+                        🟢 암기 완료
                       </button>
                     </div>
-                  </div>
-
-                  {typingMode === "initial" && (
-                    <div className="mb-4 p-3 rounded-xl bg-zinc-850/60 border border-zinc-800/80 text-center">
-                      <span className="text-[10px] text-zinc-500 block mb-0.5">초성 힌트</span>
-                      <p className="text-sm font-bold tracking-widest text-emerald-300 leading-relaxed">
-                        {getInitials(currentPracticeVerse.text)}
-                      </p>
+                    {/* Keyboard Shortcuts Guide */}
+                    <div className={`hidden md:flex justify-center items-center gap-x-4 gap-y-1 flex-wrap text-[10px] p-2.5 rounded-xl border mt-3 select-none ${darkMode ? "text-zinc-500 bg-zinc-900/30 border-zinc-800/40" : "text-slate-500 bg-slate-50 border-slate-200"}`}>
+                      <span>⌨️ <b>단축키</b></span>
+                      <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-850 border border-zinc-700 text-zinc-400">Space</kbd> 뒤집기</span>
+                      <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-850 border border-zinc-700 text-zinc-400">←</kbd> / <kbd className="px-1.5 py-0.5 rounded bg-zinc-850 border border-zinc-700 text-zinc-400">→</kbd> 이동</span>
+                      <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-850 border border-zinc-700 text-zinc-400">L</kbd> 암기완료</span>
+                      <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-850 border border-zinc-700 text-zinc-400">R</kbd> 복습중</span>
+                      <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-850 border border-zinc-700 text-zinc-400">U</kbd> 미학습</span>
+                      <span><kbd className="px-1.5 py-0.5 rounded bg-zinc-850 border border-zinc-700 text-zinc-400">S</kbd> 오디오 재생/정지</span>
                     </div>
-                  )}
-
-                  <textarea
-                    placeholder="암송하며 한글 혹은 초성으로 입력해 보세요..."
-                    value={practiceUserInput}
-                    onChange={(e) => setPracticeUserInput(e.target.value)}
-                    className={`w-full p-4 text-base rounded-2xl border outline-none min-h-[110px] transition-all duration-350 ${
-                      practiceUserInput === ""
-                        ? darkMode
-                          ? "bg-zinc-800 border-zinc-700"
-                          : "bg-slate-50 border-slate-200"
-                        : getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isMatch
-                        ? getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isComplete
-                          ? "bg-emerald-950/20 border-emerald-500 text-emerald-300"
-                          : "bg-zinc-800 border-emerald-600 text-zinc-200"
-                        : "bg-rose-950/20 border-rose-600 text-rose-300"
-                    }`}
-                  />
-
-                  <div className="flex justify-between items-center text-xs mt-2">
-                    <div>
-                      {practiceUserInput !== "" && (
-                        <span className="font-bold">
-                          {getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isMatch ? (
-                            getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isComplete ? (
-                              <span className="text-emerald-400">🎉 정답 통과!</span>
-                            ) : (
-                              <span className="text-emerald-400">✅ 올바른 입력 중...</span>
-                            )
-                          ) : (
-                            <span className="text-rose-500">❌ 오타가 있습니다.</span>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-zinc-500">
-                      앞부분에 `1.`, `1절`, `1:1`, `:1`을 쓰거나 생략해도 채점 시 정상 통과됩니다.
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-between gap-3">
-                  <button onClick={() => setShowPracticeAnswer(!showPracticeAnswer)} className="px-3 py-1.5 bg-zinc-850 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 text-xs rounded-xl">
-                    {showPracticeAnswer ? "👁️ 정답 숨기기" : "👁️ 정답 보기"}
-                  </button>
-                  <button onClick={() => setPracticeUserInput("")} className="px-3 py-1.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-400 text-xs rounded-xl">
-                    지우기
-                  </button>
-                </div>
-
-                {showPracticeAnswer && (
-                  <div className="p-4 rounded-xl border border-dashed border-emerald-800 bg-emerald-950/5">
-                    <p className="text-sm font-semibold leading-relaxed">{currentPracticeVerse.text}</p>
                   </div>
                 )}
-              </div>
+
+                {/* --- SUB-TAB B: BLANKS --- */}
+                {practiceSubTab === "blank" && (
+                  <div className="space-y-6">
+                    <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                      <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-base font-bold text-emerald-400">{currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절</h3>
+                          <button
+                            onClick={() => handleToggleHardVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse)}
+                            className={`p-1 rounded text-xs transition-transform hover:scale-110 ${hardVerses[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "opacity-100 filter drop-shadow" : "opacity-30 hover:opacity-75"}`}
+                            title={hardVerses[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "어려운 구절에서 해제" : "잘 안 외워지는 어려운 구절로 지정"}
+                          >
+                            📌
+                          </button>
+                        </div>
+                        <div className={`flex p-0.5 rounded-lg border text-xs ${darkMode ? "bg-zinc-850 border-zinc-700" : "bg-slate-100 border-slate-200"}`}>
+                          {(["easy", "medium", "hard"] as const).map((diff) => (
+                            <button
+                              key={diff}
+                              onClick={() => { setBlankDifficulty(diff); setRevealedBlanks([]); }}
+                              className={`px-2.5 py-1 rounded-md font-medium transition-all ${blankDifficulty === diff ? "bg-emerald-600 text-white shadow-sm" : darkMode ? "text-zinc-400 hover:text-zinc-300" : "text-slate-600 hover:text-slate-800"}`}
+                            >
+                              {diff === "easy" ? "쉬움" : diff === "medium" ? "보통" : "어려움"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="text-lg sm:text-xl leading-loose font-semibold text-center py-6 select-none flex flex-wrap gap-x-2 gap-y-3 justify-center">
+                        {blankedPracticeWords.map((word, idx) => {
+                          const isRevealed = revealedBlanks.includes(idx);
+                          if (word.isMasked && !isRevealed) {
+                            return (
+                              <span
+                                key={idx}
+                                onClick={() => setRevealedBlanks([...revealedBlanks, idx])}
+                                className="px-3 bg-zinc-800 hover:bg-zinc-700 text-transparent border-b-2 border-emerald-500 rounded cursor-pointer transition-colors"
+                              >
+                                {word.text.replace(/./g, "?")}
+                              </span>
+                            );
+                          }
+                          return (
+                            <span
+                              key={idx}
+                              onClick={() => { if (word.isMasked) setRevealedBlanks(revealedBlanks.filter(i => i !== idx)); }}
+                              className={`transition-all ${word.isMasked ? "text-emerald-400 border-b-2 border-dashed border-emerald-400/50" : ""}`}
+                            >
+                              {word.text}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between gap-3">
+                      <button onClick={() => setRevealedBlanks([])} className={`px-3 py-1.5 border text-xs rounded-xl transition-all ${darkMode ? "border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800" : "border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-100"}`}>
+                        🔄 다시 가리기
+                      </button>
+                      <button onClick={() => setRevealedBlanks(Array.from({ length: blankedPracticeWords.length }, (_, i) => i))} className={`px-3 py-1.5 text-xs rounded-xl transition-all ${darkMode ? "bg-zinc-800 hover:bg-zinc-700 text-zinc-300" : "bg-slate-100 hover:bg-slate-200 text-slate-700"}`}>
+                        👁️ 전체 정답 보기
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* --- SUB-TAB C: TYPING TEST --- */}
+                {practiceSubTab === "typing" && (
+                  <div className="space-y-6">
+                    <div className={`p-6 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                      <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-base font-bold text-emerald-400">{currentPracticeVerse.chapter}장 {currentPracticeVerse.verse}절</h3>
+                          <button
+                            onClick={() => handleToggleHardVerse(currentPracticeVerse.chapter, currentPracticeVerse.verse)}
+                            className={`p-1 rounded text-xs transition-transform hover:scale-110 ${hardVerses[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "opacity-100 filter drop-shadow" : "opacity-30 hover:opacity-75"}`}
+                            title={hardVerses[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] ? "어려운 구절에서 해제" : "잘 안 외워지는 어려운 구절로 지정"}
+                          >
+                            📌
+                          </button>
+                        </div>
+                        <div className={`flex p-0.5 rounded-lg border text-[10px] ${darkMode ? "bg-zinc-850 border-zinc-700" : "bg-slate-105 border-slate-200"}`}>
+                          <button onClick={() => { setTypingMode("initial"); setPracticeUserInput(""); }} className={`px-2.5 py-1 rounded transition-all ${typingMode === "initial" ? "bg-emerald-600 text-white shadow-sm" : darkMode ? "text-zinc-400 hover:text-zinc-300" : "text-slate-650 hover:text-slate-800"}`}>
+                            초성 모드
+                          </button>
+                          <button onClick={() => { setTypingMode("full"); setPracticeUserInput(""); }} className={`px-2.5 py-1 rounded transition-all ${typingMode === "full" ? "bg-emerald-600 text-white shadow-sm" : darkMode ? "text-zinc-400 hover:text-zinc-300" : "text-slate-650 hover:text-slate-800"}`}>
+                            전체 모드
+                          </button>
+                        </div>
+                      </div>
+
+                      {typingMode === "initial" && (
+                        <div className={`mb-4 p-3 rounded-xl text-center border ${darkMode ? "bg-zinc-850/60 border-zinc-800" : "bg-slate-50 border-slate-200"}`}>
+                          <span className="text-[10px] text-zinc-500 block mb-0.5">초성 힌트</span>
+                          <p className="text-sm font-bold tracking-widest text-emerald-350 leading-relaxed break-keep">
+                            {getInitials(currentPracticeVerse.text)}
+                          </p>
+                        </div>
+                      )}
+
+                      <textarea
+                        placeholder="암송하며 한글 혹은 초성으로 입력해 보세요..."
+                        value={practiceUserInput}
+                        onChange={(e) => setPracticeUserInput(e.target.value)}
+                        className={`w-full p-4 text-base rounded-2xl border outline-none min-h-[110px] transition-all duration-350 ${
+                          practiceUserInput === ""
+                            ? darkMode
+                              ? "bg-zinc-800 border-zinc-700 text-white focus:border-zinc-600"
+                              : "bg-slate-50 border-slate-200 text-slate-800 focus:border-slate-350 shadow-inner"
+                            : getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isMatch
+                            ? getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isComplete
+                              ? "bg-emerald-950/20 border-emerald-500 text-emerald-300"
+                              : darkMode
+                              ? "bg-zinc-800 border-emerald-600 text-zinc-200"
+                              : "bg-emerald-50/50 border-emerald-400 text-slate-800"
+                            : "bg-rose-950/20 border-rose-600 text-rose-300"
+                        }`}
+                      />
+
+                      <div className="flex justify-between items-center text-xs mt-2 flex-wrap gap-2">
+                        <div>
+                          {practiceUserInput !== "" && (
+                            <span className="font-bold">
+                              {getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isMatch ? (
+                                getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isComplete ? (
+                                  <span className="text-emerald-400">🎉 정답 통과!</span>
+                                ) : (
+                                  <span className="text-emerald-400">✅ 올바른 입력 중...</span>
+                                )
+                              ) : (
+                                <span className="text-rose-500">❌ 오타가 있습니다.</span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-zinc-500">
+                          앞부분에 장/절을 쓰거나 생략해도 채점 시 정상 통과됩니다.
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Diff Feedback for typing errors */}
+                    {practiceUserInput !== "" && !getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)?.isMatch && (
+                      <div className="animate-fade-in">
+                        {renderDiffFeedback(practiceUserInput, currentPracticeVerse.text, typingMode)}
+                      </div>
+                    )}
+
+                    <div className="flex justify-between gap-3">
+                      <button onClick={() => setShowPracticeAnswer(!showPracticeAnswer)} className={`px-3 py-1.5 border text-xs rounded-xl transition-all ${darkMode ? "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700" : "bg-white border-slate-200 text-slate-650 hover:bg-slate-50"}`}>
+                        {showPracticeAnswer ? "👁️ 정답 숨기기" : "👁️ 정답 보기"}
+                      </button>
+                      <button onClick={() => setPracticeUserInput("")} className={`px-3 py-1.5 text-xs rounded-xl transition-all ${darkMode ? "bg-zinc-800 hover:bg-zinc-700 text-zinc-400" : "bg-slate-100 hover:bg-slate-200 text-slate-500"}`}>
+                        지우기
+                      </button>
+                    </div>
+
+                    {showPracticeAnswer && (
+                      <div className={`p-4 rounded-xl border border-dashed ${darkMode ? "border-emerald-800 bg-emerald-950/5 text-zinc-200" : "border-emerald-200 bg-emerald-50/20 text-slate-700"}`}>
+                        <p className="text-sm font-semibold leading-relaxed break-keep">{currentPracticeVerse.text}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Navigation inside practices */}
+                <div className="flex items-center justify-between gap-4 pt-4">
+                  <button
+                    disabled={currentPracticeIndex === 0}
+                    onClick={() => {
+                      setCurrentPracticeIndex((prev) => prev - 1);
+                      setIsPracticeCardFlipped(false);
+                      setPracticeUserInput("");
+                      setShowPracticeAnswer(false);
+                      setRevealedBlanks([]);
+                      stopTTS();
+                    }}
+                    className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold disabled:opacity-40 transition-colors ${darkMode ? "bg-zinc-900 hover:bg-zinc-850 text-zinc-400" : "bg-slate-100 hover:bg-slate-200 text-slate-650"}`}
+                  >
+                    이전 구절
+                  </button>
+
+                  <button
+                    disabled={currentPracticeIndex === filteredVerses.length - 1}
+                    onClick={() => {
+                      const feed = getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode);
+                      if (practiceSubTab === "typing" && feed?.isComplete) {
+                        handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "learned");
+                      }
+                      
+                      setCurrentPracticeIndex((prev) => prev + 1);
+                      setIsPracticeCardFlipped(false);
+                      setPracticeUserInput("");
+                      setShowPracticeAnswer(false);
+                      setRevealedBlanks([]);
+                      stopTTS();
+                    }}
+                    className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-md disabled:opacity-40 transition-all active:scale-95"
+                  >
+                    다음 구절
+                  </button>
+                </div>
+
+                {/* Personal Notes section */}
+                <div className={`p-4 rounded-2xl border ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200"}`}>
+                  <label className="block text-xs font-bold text-zinc-400 mb-2">📝 개인 묵상 및 메모 기록</label>
+                  <textarea
+                    placeholder="해당 구절에 메모나 연상 단어를 적어 기억을 돕도록 하세요..."
+                    value={notes[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] || ""}
+                    onChange={(e) => handleSaveNote(currentPracticeVerse.chapter, currentPracticeVerse.verse, e.target.value)}
+                    className={`w-full p-3 text-xs rounded-xl border outline-none min-h-[80px] ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-50 border-slate-200 text-slate-800"}`}
+                  />
+                </div>
+              </>
             )}
-
-            {/* Navigation inside practices */}
-            <div className="flex items-center justify-between gap-4 pt-4">
-              <button
-                disabled={currentPracticeIndex === 0}
-                onClick={() => {
-                  setCurrentPracticeIndex((prev) => prev - 1);
-                  setIsPracticeCardFlipped(false);
-                  setPracticeUserInput("");
-                  setShowPracticeAnswer(false);
-                  setRevealedBlanks([]);
-                  stopTTS();
-                }}
-                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-850 text-xs font-bold text-zinc-400 disabled:opacity-40"
-              >
-                이전 구절
-              </button>
-
-              <button
-                disabled={currentPracticeIndex === filteredVerses.length - 1}
-                onClick={() => {
-                  const feed = getTypingFeedback(practiceUserInput, currentPracticeVerse.text, typingMode);
-                  if (practiceSubTab === "typing" && feed?.isComplete) {
-                    handleUpdateStatus(currentPracticeVerse.chapter, currentPracticeVerse.verse, "learned");
-                  }
-                  
-                  setCurrentPracticeIndex((prev) => prev + 1);
-                  setIsPracticeCardFlipped(false);
-                  setPracticeUserInput("");
-                  setShowPracticeAnswer(false);
-                  setRevealedBlanks([]);
-                  stopTTS();
-                }}
-                className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-md disabled:opacity-40"
-              >
-                다음 구절
-              </button>
-            </div>
-
-            {/* Personal Notes section */}
-            <div className={`p-4 rounded-2xl border ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200"}`}>
-              <label className="block text-xs font-bold text-zinc-400 mb-2">📝 개인 묵상 및 메모 기록</label>
-              <textarea
-                placeholder="해당 구절에 메모나 연상 단어를 적어 기억을 돕도록 하세요..."
-                value={notes[`${currentPracticeVerse.chapter}:${currentPracticeVerse.verse}`] || ""}
-                onChange={(e) => handleSaveNote(currentPracticeVerse.chapter, currentPracticeVerse.verse, e.target.value)}
-                className={`w-full p-3 text-xs rounded-xl border outline-none min-h-[80px] ${darkMode ? "bg-zinc-800 border-zinc-700 text-white" : "bg-slate-50 border-slate-200 text-slate-800"}`}
-              />
-            </div>
 
           </div>
         )}

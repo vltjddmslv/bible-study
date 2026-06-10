@@ -19,6 +19,7 @@ export interface UserData {
   studyHistory: any[];
   completedDays: any;
   studyPlan?: any;
+  hardVerses?: any;
   updatedAt: string;
   token?: string;
 }
@@ -46,6 +47,7 @@ async function initDb() {
         study_history JSONB DEFAULT '[]'::jsonb,
         completed_days JSONB DEFAULT '{}'::jsonb,
         study_plan JSONB DEFAULT NULL,
+        hard_verses JSONB DEFAULT '{}'::jsonb,
         token TEXT,
         updated_at TEXT
       );
@@ -53,6 +55,9 @@ async function initDb() {
     // Ensure column exists for existing tables
     await client.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS study_plan JSONB DEFAULT NULL;
+    `);
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS hard_verses JSONB DEFAULT '{}'::jsonb;
     `);
     isInitialized = true;
   } catch (error) {
@@ -79,6 +84,7 @@ export async function readDb(): Promise<DbSchema> {
         studyHistory: row.study_history || [],
         completedDays: row.completed_days || {},
         studyPlan: row.study_plan || null,
+        hardVerses: row.hard_verses || {},
         token: row.token || undefined,
         updatedAt: row.updated_at || new Date().toISOString(),
       };
@@ -103,8 +109,8 @@ export async function writeDb(data: DbSchema): Promise<void> {
     for (const username of Object.keys(data.users)) {
       const u = data.users[username];
       await client.query(
-        `INSERT INTO users (username, password_hash, salt, progress, notes, study_history, completed_days, study_plan, token, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO users (username, password_hash, salt, progress, notes, study_history, completed_days, study_plan, hard_verses, token, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (username) DO UPDATE SET
            password_hash = EXCLUDED.password_hash,
            salt = EXCLUDED.salt,
@@ -113,6 +119,7 @@ export async function writeDb(data: DbSchema): Promise<void> {
            study_history = EXCLUDED.study_history,
            completed_days = EXCLUDED.completed_days,
            study_plan = EXCLUDED.study_plan,
+           hard_verses = EXCLUDED.hard_verses,
            token = EXCLUDED.token,
            updated_at = EXCLUDED.updated_at`,
         [
@@ -124,6 +131,7 @@ export async function writeDb(data: DbSchema): Promise<void> {
           JSON.stringify(u.studyHistory || []),
           JSON.stringify(u.completedDays || {}),
           u.studyPlan ? JSON.stringify(u.studyPlan) : null,
+          JSON.stringify(u.hardVerses || {}),
           u.token || null,
           u.updatedAt || new Date().toISOString()
         ]

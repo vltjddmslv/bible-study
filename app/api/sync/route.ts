@@ -33,6 +33,7 @@ export async function GET(request: Request) {
       studyHistory: user.studyHistory || [],
       completedDays: user.completedDays || {},
       studyPlan: user.studyPlan || null,
+      hardVerses: user.hardVerses || {},
       updatedAt: user.updatedAt,
     });
   } catch (e) {
@@ -47,7 +48,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { username, token, progress, notes, studyHistory, completedDays, studyPlan } = body;
+    const { username, token, progress, notes, studyHistory, completedDays, studyPlan, hardVerses } = body;
 
     if (!username || !token) {
       return NextResponse.json(
@@ -83,9 +84,16 @@ export async function POST(request: Request) {
       });
     }
 
-    // 2. Merge Completed Days (Union of completed days)
-    const mergedCompleted = { ...(user.completedDays || {}) };
-    if (completedDays) {
+    // Check if the study plan changed/reset
+    const serverPlanJson = user.studyPlan ? JSON.stringify(user.studyPlan) : null;
+    const clientPlanJson = studyPlan ? JSON.stringify(studyPlan) : null;
+    const planChanged = serverPlanJson !== clientPlanJson;
+
+    // 2. Merge Completed Days (Overwrite if plan changed, otherwise merge union)
+    let mergedCompleted = { ...(user.completedDays || {}) };
+    if (planChanged) {
+      mergedCompleted = completedDays || {};
+    } else if (completedDays) {
       Object.keys(completedDays).forEach((dayStr) => {
         if (completedDays[dayStr]) {
           mergedCompleted[dayStr] = true;
@@ -126,6 +134,14 @@ export async function POST(request: Request) {
     if (studyPlan !== undefined) {
       user.studyPlan = studyPlan;
     }
+    
+    // 6. Merge Hard Verses (overwrite/assign keys)
+    const mergedHard = { ...(user.hardVerses || {}) };
+    if (hardVerses) {
+      Object.assign(mergedHard, hardVerses);
+    }
+    user.hardVerses = mergedHard;
+    
     user.updatedAt = new Date().toISOString();
 
     await writeDb(db);
@@ -141,6 +157,7 @@ export async function POST(request: Request) {
         notes: mergedNotes,
         studyHistory: mergedHistory,
         studyPlan: user.studyPlan || null,
+        hardVerses: user.hardVerses || {},
       }
     });
   } catch (e) {
