@@ -383,17 +383,11 @@ export default function RevelationMemorizer() {
   };
 
   const handleCompleteDay = (day: number) => {
+    // Only record the day as completed. Do NOT auto-mark verses as learned.
+    // Progress percent only increases when the user manually checks each verse.
     const newCompleted = { ...completedDays, [day]: true };
     setCompletedDays(newCompleted);
     localStorage.setItem("rev_completed_days", JSON.stringify(newCompleted));
-
-    // Mark all verses in this day as learned
-    const dayVerses = getVersesForDay(day);
-    const newProgress = { ...progress };
-    dayVerses.forEach((v) => {
-      newProgress[`${v.chapter}:${v.verse}`] = "learned";
-    });
-    saveProgress(newProgress);
   };
 
   // --- Dynamic Scheduler Generators ---
@@ -891,13 +885,36 @@ export default function RevelationMemorizer() {
       };
     });
 
+    // --- Key Verses Stats ---
+    const keyVersesList = REVELATION_VERSES.filter((v) => isKeyVerse(v.chapter, v.verse));
+    const keyTotal = keyVersesList.length;
+    let keyLearned = 0;
+    let keyReviewing = 0;
+    keyVersesList.forEach((v) => {
+      const s = progress[`${v.chapter}:${v.verse}`] || "unlearned";
+      if (s === "learned") keyLearned++;
+      else if (s === "reviewing") keyReviewing++;
+    });
+    const keyPercent = keyTotal > 0 ? Math.round((keyLearned / keyTotal) * 100) : 0;
+
+    const dailyTotal = total;
+    const dailyLearned = learned;
+    const dailyPercent = percent;
+
     return {
       total,
       learned,
       reviewing,
       unlearned,
       percent,
-      chapterStats
+      chapterStats,
+      keyTotal,
+      keyLearned,
+      keyReviewing,
+      keyPercent,
+      dailyTotal,
+      dailyLearned,
+      dailyPercent
     };
   }, [progress]);
 
@@ -1854,86 +1871,127 @@ export default function RevelationMemorizer() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Left Column: Progress circle */}
-              <div className={`p-6 rounded-3xl border flex flex-col justify-between transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
-                <div>
-                  <h3 className="text-base font-bold mb-4">전체 요한계시록 암송 현황</h3>
-                  <div className="flex items-center justify-center py-6">
-                    <div className="relative w-40 h-40">
+              {/* Left Column: 일일계획 + 핵심성구 2개 카드 */}
+              <div className="flex flex-col gap-4">
+
+                {/* ① 일일계획 암송 현황 */}
+                <div className={`p-5 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                  <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                    <span className="p-1 rounded-lg bg-emerald-500/10 text-emerald-400">📅</span>
+                    일일계획 암송 현황
+                    <span className={`ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full ${darkMode ? "bg-zinc-800 text-zinc-400" : "bg-slate-100 text-slate-500"}`}>전체 {stats.dailyTotal}구절</span>
+                  </h3>
+                  <div className="flex items-center gap-4">
+                    <div className="relative w-24 h-24 flex-shrink-0">
                       <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
-                        <circle className={`${darkMode ? "text-zinc-800" : "text-slate-100"}`} strokeWidth="10" stroke="currentColor" fill="transparent" r="38" cx="50" cy="50"/>
-                        <circle className="text-emerald-500 transition-all duration-1000" strokeWidth="10" strokeDasharray={2*Math.PI*38} strokeDashoffset={2*Math.PI*38*(1 - stats.percent/100)} strokeLinecap="round" stroke="currentColor" fill="transparent" r="38" cx="50" cy="50"/>
+                        <circle className={`${darkMode ? "text-zinc-800" : "text-slate-100"}`} strokeWidth="12" stroke="currentColor" fill="transparent" r="38" cx="50" cy="50"/>
+                        <circle className="text-emerald-500 transition-all duration-1000" strokeWidth="12" strokeDasharray={2*Math.PI*38} strokeDashoffset={2*Math.PI*38*(1 - stats.dailyPercent/100)} strokeLinecap="round" stroke="currentColor" fill="transparent" r="38" cx="50" cy="50"/>
                       </svg>
                       <div className="absolute inset-0 flex flex-col items-center justify-center">
-                        <span className="text-4xl font-extrabold">{stats.percent}%</span>
-                        <span className="text-xs text-zinc-400 mt-1">암기 완료</span>
+                        <span className="text-2xl font-extrabold">{stats.dailyPercent}%</span>
+                        <span className="text-[9px] text-zinc-400 mt-0.5">암기 완료</span>
+                      </div>
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="flex items-center gap-1.5 text-zinc-400"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>완료</span>
+                        <span className="font-bold text-emerald-400">{stats.dailyLearned}구절</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="flex items-center gap-1.5 text-zinc-400"><span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>복습 중</span>
+                        <span className="font-bold text-amber-400">{stats.reviewing}구절</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="flex items-center gap-1.5 text-zinc-400"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span>미학습</span>
+                        <span className="font-bold text-rose-400">{stats.unlearned}구절</span>
                       </div>
                     </div>
                   </div>
-
-                  <div className="space-y-3 mt-2">
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="flex items-center gap-2 text-zinc-400">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>🟢 암기 완료
-                      </span>
-                      <span className="font-bold">{stats.learned} 구절</span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="flex items-center gap-2 text-zinc-400">
-                        <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>🟡 복습 중
-                      </span>
-                      <span className="font-bold">{stats.reviewing} 구절</span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="flex items-center gap-2 text-zinc-400">
-                        <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>🔴 미학습
-                      </span>
-                      <span className="font-bold">{stats.unlearned} / {stats.total} 구절</span>
-                    </div>
-                  </div>
+                  <p className="text-[10px] text-zinc-500 mt-3 leading-relaxed">💡 각 구절의 완료 버튼을 눌러야 퍼센트가 올라갑니다</p>
                 </div>
 
-                {/* Streak and Study Days info */}
-                <div className="mt-6 p-4 rounded-2xl bg-gradient-to-tr from-amber-600/10 to-emerald-600/10 border border-emerald-500/20 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="text-2xl">🔥</div>
-                    <div>
-                      <h4 className="text-sm font-bold">연속 학습 일수</h4>
-                      <p className="text-xs text-zinc-400">매일 빼놓지 않고 암송하세요!</p>
+                {/* ② 핵심성구 암송 현황 */}
+                <div className={`p-5 rounded-3xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-amber-500/20" : "bg-white border-amber-200 shadow-sm"}`}>
+                  <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                    <span className="p-1 rounded-lg bg-amber-500/10 text-amber-400">⭐</span>
+                    핵심성구 암송 현황
+                    <span className={`ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full ${darkMode ? "bg-zinc-800 text-zinc-400" : "bg-slate-100 text-slate-500"}`}>전체 {stats.keyTotal}구절</span>
+                  </h3>
+                  <div className="flex items-center gap-4">
+                    <div className="relative w-24 h-24 flex-shrink-0">
+                      <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+                        <circle className={`${darkMode ? "text-zinc-800" : "text-slate-100"}`} strokeWidth="12" stroke="currentColor" fill="transparent" r="38" cx="50" cy="50"/>
+                        <circle className="text-amber-500 transition-all duration-1000" strokeWidth="12" strokeDasharray={2*Math.PI*38} strokeDashoffset={2*Math.PI*38*(1 - stats.keyPercent/100)} strokeLinecap="round" stroke="currentColor" fill="transparent" r="38" cx="50" cy="50"/>
+                      </svg>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center">
+                        <span className="text-2xl font-extrabold text-amber-400">{stats.keyPercent}%</span>
+                        <span className="text-[9px] text-zinc-400 mt-0.5">암기 완료</span>
+                      </div>
+                    </div>
+                    <div className="flex-1 space-y-2">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="flex items-center gap-1.5 text-zinc-400"><span className="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></span>완료</span>
+                        <span className="font-bold text-amber-400">{stats.keyLearned}구절</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="flex items-center gap-1.5 text-zinc-400"><span className="w-2.5 h-2.5 rounded-full bg-amber-600 inline-block"></span>복습 중</span>
+                        <span className="font-bold text-amber-500">{stats.keyReviewing}구절</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="flex items-center gap-1.5 text-zinc-400"><span className="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span>미학습</span>
+                        <span className="font-bold text-rose-400">{stats.keyTotal - stats.keyLearned - stats.keyReviewing}구절</span>
+                      </div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-3xl font-extrabold text-amber-500">{currentStreak}</span>
-                    <span className="text-xs text-zinc-400 ml-1">일째</span>
-                  </div>
+                  <button
+                    onClick={() => { setActiveTab("key-verses"); }}
+                    className="mt-3 w-full text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-xl py-1.5 transition-all"
+                  >
+                    ⭐ 핵심성구 탭으로 이동하여 체크하기 →
+                  </button>
                 </div>
 
-                {/* 학습 계획 진행 현황 카드 */}
-                {studyPlan && todayStudyStatus && (
-                  <div className={`mt-4 p-4 rounded-2xl border transition-colors ${darkMode ? "bg-zinc-800/40 border-zinc-800 text-zinc-200" : "bg-slate-50 border-slate-200 text-slate-800"}`}>
-                    <h4 className="text-xs font-bold text-emerald-500 mb-2">📅 학습 계획 진행 현황</h4>
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <span className="text-xs font-bold block">{todayStudyStatus.displayMsg}</span>
-                        <span className="text-[10px] text-zinc-400 block">계획 기간: {studyPlan.startDate} ~ {studyPlan.endDate}</span>
-                      </div>
-                      <div className="text-right">
-                        {todayStudyStatus.status === "before" ? (
-                          <span className="text-xs font-extrabold text-amber-400 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/20">{todayStudyStatus.dDay}</span>
-                        ) : todayStudyStatus.status === "completed" ? (
-                          <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20">완주 완료 🏆</span>
-                        ) : todayStudyStatus.status === "rest" ? (
-                          <span className="text-xs font-extrabold text-teal-400 bg-teal-500/10 px-2 py-1 rounded-lg border border-teal-500/20">휴식일 ☕</span>
-                        ) : (
-                          <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20">
-                            {todayStudyStatus.currentDayNum} / {studyPlan.totalDays} 일차
-                          </span>
-                        )}
+                {/* Streak + 학습계획 현황 */}
+                <div className={`p-4 rounded-2xl border transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="text-2xl">🔥</div>
+                      <div>
+                        <h4 className="text-sm font-bold">연속 학습 일수</h4>
+                        <p className="text-xs text-zinc-400">매일 빼놓지 않고 암송하세요!</p>
                       </div>
                     </div>
+                    <div className="text-right">
+                      <span className="text-3xl font-extrabold text-amber-500">{currentStreak}</span>
+                      <span className="text-xs text-zinc-400 ml-1">일째</span>
+                    </div>
                   </div>
-                )}
+                  {studyPlan && todayStudyStatus && (
+                    <div className={`mt-3 pt-3 border-t ${darkMode ? "border-zinc-800" : "border-slate-100"}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-0.5">
+                          <span className="text-xs font-bold block">{todayStudyStatus.displayMsg}</span>
+                          <span className="text-[10px] text-zinc-400 block">📅 {studyPlan.startDate} ~ {studyPlan.endDate}</span>
+                        </div>
+                        <div className="text-right">
+                          {todayStudyStatus.status === "before" ? (
+                            <span className="text-xs font-extrabold text-amber-400 bg-amber-500/10 px-2 py-1 rounded-lg border border-amber-500/20">{todayStudyStatus.dDay}</span>
+                          ) : todayStudyStatus.status === "completed" ? (
+                            <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20">완주 완료 🏆</span>
+                          ) : todayStudyStatus.status === "rest" ? (
+                            <span className="text-xs font-extrabold text-teal-400 bg-teal-500/10 px-2 py-1 rounded-lg border border-teal-500/20">휴식일 ☕</span>
+                          ) : (
+                            <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20">
+                              {todayStudyStatus.currentDayNum} / {studyPlan.totalDays} 일차
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
+              
 
               {/* Right Column: Chapter Progress Cards */}
               <div className={`p-6 rounded-3xl border lg:col-span-2 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
