@@ -57,3 +57,13 @@ body {
   background: rgba(120, 120, 120, 0.5);
 }
 
+/* Scrollbar none utility */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
+
+
