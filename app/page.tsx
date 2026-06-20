@@ -641,21 +641,53 @@ export default function RevelationMemorizer() {
     const cleanedInput = cleanVerseMarker(input);
     const cleanedTarget = cleanVerseMarker(originalText);
 
-    // If initial mode, extract initials of the input so typing in Korean matches initials too!
-    const normalizedInput = (mode === "initial" ? getInitials(cleanedInput) : cleanedInput)
+    const targetNorm = cleanedTarget
       .replace(/\s+/g, "")
-      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
-    
-    const normalizedTarget = (mode === "initial" ? getInitials(cleanedTarget) : cleanedTarget)
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
+      .toLowerCase();
+
+    const inputNorm = cleanedInput
       .replace(/\s+/g, "")
-      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
+      .toLowerCase();
 
-    if (normalizedInput === "") return null;
+    if (inputNorm === "") return null;
 
-    const isMatch = normalizedTarget.startsWith(normalizedInput);
-    const isComplete = normalizedTarget === normalizedInput;
+    let isMatch = true;
+    if (mode === "full") {
+      isMatch = targetNorm.startsWith(inputNorm);
+      const isComplete = targetNorm === inputNorm;
+      return { isMatch, isComplete };
+    } else {
+      const KOREAN_INITIALS = [
+        "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ",
+        "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
+      ];
 
-    return { isMatch, isComplete };
+      if (inputNorm.length > targetNorm.length) {
+        isMatch = false;
+      } else {
+        for (let i = 0; i < inputNorm.length; i++) {
+          const charInput = inputNorm[i];
+          const charTarget = targetNorm[i];
+
+          if (KOREAN_INITIALS.includes(charInput)) {
+            if (charInput !== getInitials(charTarget)) {
+              isMatch = false;
+              break;
+            }
+          } else {
+            if (charInput !== charTarget) {
+              isMatch = false;
+              break;
+            }
+          }
+        }
+      }
+
+      const isComplete = isMatch && (inputNorm.length === targetNorm.length);
+      return { isMatch, isComplete };
+    }
   };
 
   // --- Dynamic Diff Feedback Markup Visualizer ---
@@ -671,33 +703,51 @@ export default function RevelationMemorizer() {
         .trim();
     };
 
-    const resolvedTarget = mode === "initial" ? getInitials(target) : target;
-    const resolvedInput = mode === "initial" ? getInitials(input) : input;
+    const targetPureForMatch = cleanVerseMarker(target);
+    const inputPureForMatch = cleanVerseMarker(input);
 
-    const targetPure = cleanVerseMarker(resolvedTarget);
-    const inputPure = cleanVerseMarker(resolvedInput);
+    const targetNoSpace = targetPureForMatch.replace(/\s+/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+    const inputNoSpace = inputPureForMatch.replace(/\s+/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
 
-    const targetNoSpace = targetPure.replace(/\s+/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
-    const inputNoSpace = inputPure.replace(/\s+/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+    const KOREAN_INITIALS = [
+      "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ",
+      "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"
+    ];
 
     let matchLen = 0;
     while (
       matchLen < inputNoSpace.length &&
-      matchLen < targetNoSpace.length &&
-      inputNoSpace[matchLen] === targetNoSpace[matchLen]
+      matchLen < targetNoSpace.length
     ) {
+      const charInput = inputNoSpace[matchLen];
+      const charTarget = targetNoSpace[matchLen];
+      let isCharMatch = false;
+
+      if (mode === "initial") {
+        if (KOREAN_INITIALS.includes(charInput)) {
+          isCharMatch = charInput === getInitials(charTarget);
+        } else {
+          isCharMatch = charInput === charTarget;
+        }
+      } else {
+        isCharMatch = charInput === charTarget;
+      }
+
+      if (!isCharMatch) {
+        break;
+      }
       matchLen++;
     }
 
     const markerRegex = /^(\s*\[?\d+장\s*\d+절\]?|\s*\[?\d+[:.]\d+\]?|\s*[:.]\d+|\s*\d+절|\s*\d+\.|\s*\d+)/;
-    const markerMatch = resolvedTarget.match(markerRegex);
+    const markerMatch = target.match(markerRegex);
     const markerLength = markerMatch ? markerMatch[0].length : 0;
 
     const elements: React.ReactNode[] = [];
     let pureCharIndex = 0;
 
-    for (let i = 0; i < resolvedTarget.length; i++) {
-      const char = resolvedTarget[i];
+    for (let i = 0; i < target.length; i++) {
+      const char = target[i];
 
       if (i < markerLength) {
         elements.push(
@@ -706,39 +756,14 @@ export default function RevelationMemorizer() {
           </span>
         );
       } else if (/[.,\/#!$%\^&\*;:{}=\-_`~()\s]/.test(char)) {
-        const isPastMatch = pureCharIndex >= matchLen;
+        elements.push(<span key={i}>{char}</span>);
+      } else {
+        const isCorrect = pureCharIndex < matchLen;
         elements.push(
-          <span 
-            key={i} 
-            className={
-              isPastMatch 
-                ? "text-red-500/80 border-b border-red-500/35" 
-                : darkMode 
-                ? "text-zinc-400" 
-                : "text-slate-500"
-            }
-          >
+          <span key={i} className={isCorrect ? (darkMode ? "text-zinc-300" : "text-slate-800") : "text-red-500 font-extrabold border-b border-red-500/50 bg-red-500/5"}>
             {char}
           </span>
         );
-      } else {
-        const isCorrect = pureCharIndex < matchLen;
-        if (isCorrect) {
-          elements.push(
-            <span key={i} className={darkMode ? "text-zinc-300 font-medium" : "text-slate-800 font-medium"}>
-              {char}
-            </span>
-          );
-        } else {
-          elements.push(
-            <span 
-              key={i} 
-              className="text-red-500 font-extrabold border-b border-red-500/50 bg-red-500/5"
-            >
-              {char}
-            </span>
-          );
-        }
         pureCharIndex++;
       }
     }
