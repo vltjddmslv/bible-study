@@ -28,6 +28,7 @@ interface StudyPlan {
   excludeWeekends: boolean;
   excludeHolidays: boolean;
   totalDays: number;
+  isReverseOrder?: boolean;
   schedule: {
     day: number;
     date: string; // YYYY-MM-DD
@@ -97,6 +98,7 @@ export default function RevelationMemorizer() {
   const [setupEndDate, setSetupEndDate] = useState<string>("");
   const [setupExcWk, setSetupExcWk] = useState<boolean>(true);
   const [setupExcHol, setSetupExcHol] = useState<boolean>(true);
+  const [setupReverseOrder, setSetupReverseOrder] = useState<boolean>(false);
 
   // Live calculation of net study days and avg verses count
   const setupPreviewStats = useMemo(() => {
@@ -127,7 +129,7 @@ export default function RevelationMemorizer() {
   const [activeDay, setActiveDay] = useState<number | null>(null);
   const [dayStudyStep, setDayStudyStep] = useState<"study" | "test" | "complete">("study");
   const [dayTestAnswers, setDayTestAnswers] = useState<string[]>(["", "", "", "", ""]);
-  const [dayTestMode, setDayTestMode] = useState<"initial" | "full">("initial");
+  const [dayTestMode, setDayTestMode] = useState<"initial" | "full">("full");
   const [activeTestVerseIdx, setActiveTestVerseIdx] = useState<number>(0);
   const [revealStudyText, setRevealStudyText] = useState<boolean[]>([true, true, true, true, true]);
 
@@ -395,7 +397,8 @@ export default function RevelationMemorizer() {
     start: string,
     end: string,
     excWk: boolean,
-    excHol: boolean
+    excHol: boolean,
+    revOrd: boolean
   ) => {
     const activeDates: string[] = [];
     const curr = new Date(start);
@@ -418,13 +421,27 @@ export default function RevelationMemorizer() {
     const baseCount = Math.floor(404 / N);
     const remainder = 404 % N;
 
+    // Create the verse indices list in the requested order (forward or reverse)
+    const verseIndices = Array.from({ length: 404 }, (_, idx) => idx);
+    if (revOrd) {
+      // Sort indices by chapter descending, then verse ascending
+      verseIndices.sort((a, b) => {
+        const va = REVELATION_VERSES[a];
+        const vb = REVELATION_VERSES[b];
+        if (va.chapter !== vb.chapter) {
+          return vb.chapter - va.chapter; // Chapter descending
+        }
+        return va.verse - vb.verse; // Verse ascending
+      });
+    }
+
     let currentVerseIdx = 0;
     const schedule = activeDates.map((dateStr, index) => {
       const count = baseCount + (index < remainder ? 1 : 0);
       const indices: number[] = [];
       for (let i = 0; i < count; i++) {
         if (currentVerseIdx < 404) {
-          indices.push(currentVerseIdx);
+          indices.push(verseIndices[currentVerseIdx]);
           currentVerseIdx++;
         }
       }
@@ -441,6 +458,7 @@ export default function RevelationMemorizer() {
       excludeWeekends: excWk,
       excludeHolidays: excHol,
       totalDays: N,
+      isReverseOrder: revOrd,
       schedule
     };
 
@@ -451,7 +469,7 @@ export default function RevelationMemorizer() {
     localStorage.removeItem("rev_completed_days");
 
     triggerBackgroundUpload(progress, notes, studyHistory, {}, newPlan);
-    alert(`📅 학습 계획이 수립되었습니다!\n총 학습일: ${N}일 (하루 평균 약 ${(404/N).toFixed(1)}구절)`);
+    alert(`📅 학습 계획이 수립되었습니다!\n방향: ${revOrd ? "역방향 (22장 → 1장)" : "순방향 (1장 → 22장)"}\n총 학습일: ${N}일 (하루 평균 약 ${(404/N).toFixed(1)}구절)`);
   };
 
   const resetStudyPlan = () => {
@@ -1778,8 +1796,21 @@ export default function RevelationMemorizer() {
                   </div>
                 </div>
 
-                {/* Exclude option switches */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                {/* Progression Direction and Exclude option switches */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+                  <label className={`p-4 rounded-2xl border flex items-center justify-between cursor-pointer transition-all duration-300 ${darkMode ? "bg-zinc-800/40 border-zinc-800 hover:bg-zinc-800" : "bg-slate-50 border-slate-100 hover:bg-slate-100"}`}>
+                    <div className="space-y-0.5">
+                      <span className="text-xs font-bold block text-zinc-200">역방향 암송 (22장 → 1장)</span>
+                      <span className="text-[10px] text-zinc-400 block">계시록 22장부터 1장 순으로 거꾸로 외웁니다.</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={setupReverseOrder}
+                      onChange={(e) => setSetupReverseOrder(e.target.checked)}
+                      className="rounded text-emerald-600 focus:ring-emerald-500 h-4 w-4"
+                    />
+                  </label>
+
                   <label className={`p-4 rounded-2xl border flex items-center justify-between cursor-pointer transition-all duration-300 ${darkMode ? "bg-zinc-800/40 border-zinc-800 hover:bg-zinc-800" : "bg-slate-50 border-slate-100 hover:bg-slate-100"}`}>
                     <div className="space-y-0.5">
                       <span className="text-xs font-bold block text-zinc-200">주말 제외 (토, 일)</span>
@@ -1827,7 +1858,7 @@ export default function RevelationMemorizer() {
 
                 {/* Generate Button */}
                 <button
-                  onClick={() => generateStudyPlan(setupStartDate, setupEndDate, setupExcWk, setupExcHol)}
+                  onClick={() => generateStudyPlan(setupStartDate, setupEndDate, setupExcWk, setupExcHol, setupReverseOrder)}
                   className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white text-sm font-black rounded-2xl transition-all shadow-lg shadow-emerald-500/10 active:scale-[0.98]"
                 >
                   📅 이 계획으로 암송 시작하기
@@ -1860,6 +1891,7 @@ export default function RevelationMemorizer() {
                 <div className="flex gap-2 justify-center md:justify-start pt-2 flex-wrap">
                   <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🎯 하루 평균 {(404 / studyPlan.totalDays).toFixed(1)}구절</span>
                   <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🗓️ {studyPlan.totalDays}일 과정</span>
+                  {studyPlan.isReverseOrder && <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🔄 역방향 (22장→1장)</span>}
                   {studyPlan.excludeWeekends && <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">☕ 주말 휴식</span>}
                   {studyPlan.excludeHolidays && <span className="bg-white/20 text-xs px-3 py-1 rounded-full font-bold">🎈 공휴일 휴식</span>}
                 </div>
@@ -2022,7 +2054,7 @@ export default function RevelationMemorizer() {
               <div className={`p-6 rounded-3xl border lg:col-span-2 transition-colors duration-300 ${darkMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-slate-200 shadow-sm"}`}>
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-base font-bold">장별 상세 진행 진도</h3>
-                  <span className="text-xs text-zinc-400">클릭 시 해당 장 학습 모드로 이동</span>
+                  <span className="text-xs text-zinc-400">클릭 시 일일 플래너로 이동</span>
                 </div>
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 max-h-[380px] overflow-y-auto pr-2 custom-scrollbar">
@@ -2031,7 +2063,7 @@ export default function RevelationMemorizer() {
                       key={ch.chapter}
                       onClick={() => {
                         setSelectedChapter(ch.chapter);
-                        setActiveTab("read");
+                        setActiveTab("planner");
                       }}
                       className={`p-3 rounded-2xl border text-left transition-all duration-200 hover:scale-[1.02] ${darkMode ? "bg-zinc-800/40 border-zinc-700/60 hover:bg-zinc-800" : "bg-slate-50 border-slate-200 hover:bg-slate-100"}`}
                     >
