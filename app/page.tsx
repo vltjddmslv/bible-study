@@ -630,7 +630,7 @@ export default function RevelationMemorizer() {
     if (!currentPracticeVerse) return [];
     const words = currentPracticeVerse.text.split(" ");
     return words.map((word, idx) => {
-      const cleanWord = word.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+      const cleanWord = word.replace(/[^a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]/g, "");
       if (cleanWord.length <= 1) return { text: word, isMasked: false };
       
       let step = 3;
@@ -649,6 +649,7 @@ export default function RevelationMemorizer() {
       return str
         .replace(/^\s*\[?\d+장\s*\d+절\]?\s*/, "") // matches "[1장 1절]" at start
         .replace(/^\s*\[?\d+[:.]\d+\]?\s*/, "")    // matches "[1:1]" or "1:1" at start
+        .replace(/^\s*[:.]\d+절\s*/, "")            // matches ":1절" at start
         .replace(/^\s*[:.]\d+\s*/, "")              // matches ":1" at start
         .replace(/^\s*\d+절\s*/, "")                // matches "1절" at start
         .replace(/^\s*\d+\.\s*/, "")                // matches "1." at start
@@ -660,13 +661,11 @@ export default function RevelationMemorizer() {
     const cleanedTarget = cleanVerseMarker(originalText);
 
     const targetNorm = cleanedTarget
-      .replace(/\s+/g, "")
-      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
+      .replace(/[^a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]/g, "")
       .toLowerCase();
 
     const inputNorm = cleanedInput
-      .replace(/\s+/g, "")
-      .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
+      .replace(/[^a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]/g, "")
       .toLowerCase();
 
     if (inputNorm === "") return null;
@@ -714,6 +713,7 @@ export default function RevelationMemorizer() {
       return str
         .replace(/^\s*\[?\d+장\s*\d+절\]?\s*/, "")
         .replace(/^\s*\[?\d+[:.]\d+\]?\s*/, "")
+        .replace(/^\s*[:.]\d+절\s*/, "")
         .replace(/^\s*[:.]\d+\s*/, "")
         .replace(/^\s*\d+절\s*/, "")
         .replace(/^\s*\d+\.\s*/, "")
@@ -724,8 +724,8 @@ export default function RevelationMemorizer() {
     const targetPureForMatch = cleanVerseMarker(target);
     const inputPureForMatch = cleanVerseMarker(input);
 
-    const targetNoSpace = targetPureForMatch.replace(/\s+/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
-    const inputNoSpace = inputPureForMatch.replace(/\s+/g, "").replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "");
+    const targetNoSpace = targetPureForMatch.replace(/[^a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]/g, "");
+    const inputNoSpace = inputPureForMatch.replace(/[^a-zA-Z0-9가-힣ㄱ-ㅎㅏ-ㅣ]/g, "");
 
     const KOREAN_INITIALS = [
       "ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ",
